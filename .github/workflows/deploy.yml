@@ -1,0 +1,129 @@
+name: Terraform infrastructure
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/deploy.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/deploy.yml'
+
+permissions:
+  contents: read
+
+# Serialize applies without interrupting an active deployment.
+concurrency:
+  group: portfolio-infra-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Format, validate and lint
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+        working-directory: infra
+    env:
+      TF_IN_AUTOMATION: 'true'
+      TF_INPUT: 'false'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.9
+          terraform_wrapper: false
+      - uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: v0.59.1
+      - name: Check formatting
+        run: terraform fmt -check -recursive
+      # PR checks need neither cloud credentials nor access to production state.
+      - name: Initialize providers
+        run: terraform init -backend=false -input=false -lockfile=readonly
+      - name: Validate configuration
+        run: terraform validate
+      - name: Lint Terraform
+        run: |
+          tflint --init
+          tflint --format=compact
+
+  apply:
+    name: Plan and apply infrastructure
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      # Permits short-lived OIDC credentials instead of static AWS keys.
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+        working-directory: infra
+    env:
+      TF_IN_AUTOMATION: 'true'
+      TF_INPUT: 'false'
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      TF_VAR_domain_name: ${{ vars.DOMAIN_NAME }}
+      TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      AWS_PAGER: ''
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Verify configuration
+        env:
+          ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          : "${ROLE_ARN:?Missing AWS_ROLE_ARN variable}"
+          : "${TF_VAR_aws_region:?Missing AWS_REGION variable}"
+          : "${TF_VAR_domain_name:?Missing DOMAIN_NAME variable}"
+          : "${TF_VAR_cloudflare_zone_id:?Missing CLOUDFLARE_ZONE_ID variable}"
+      - uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: portfolio-infra-${{ github.run_id }}
+          role-duration-seconds: 7200
+          unset-current-credentials: true
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.9
+          terraform_wrapper: false
+      - name: Initialize configured S3 backend
+        run: terraform init -input=false -lockfile=readonly
+      - name: Plan changes
+        id: plan
+        env:
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          : "${TF_VAR_cloudflare_api_token:?Missing CLOUDFLARE_API_TOKEN secret}"
+          # 0 = unchanged, 1 = error, 2 = changes; preserve real failures.
+          status=0
+          terraform plan -input=false -lock-timeout=5m -detailed-exitcode -out=deployment.tfplan || status=$?
+          case "$status" in
+            0) echo 'changed=false' >> "$GITHUB_OUTPUT" ;;
+            2) echo 'changed=true' >> "$GITHUB_OUTPUT" ;;
+            *) exit "$status" ;;
+          esac
+      - name: Apply saved plan
+        if: steps.plan.outputs.changed == 'true'
+        env:
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: terraform apply -input=false -auto-approve -lock-timeout=5m deployment.tfplan
+      - name: Report unchanged infrastructure
+        if: steps.plan.outputs.changed == 'false'
+        run: echo 'No infrastructure changes; apply skipped.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove sensitive plan
+        if: always()
+        run: rm -f deployment.tfplan

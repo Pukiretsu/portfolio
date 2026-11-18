@@ -12,10 +12,10 @@ resource "aws_s3_bucket" "website" {
 }
 
 resource "aws_s3_bucket_public_access_block" "website" {
-  bucket = aws_s3_bucket.website.id
-  block_public_acls = true
-  block_public_policy = true
-  ignore_public_acls = true
+  bucket                  = aws_s3_bucket.website.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
   restrict_public_buckets = true
 }
 
@@ -44,9 +44,9 @@ resource "aws_s3_bucket_versioning" "website" {
 
 resource "aws_acm_certificate" "website" {
   # forces terraform to deploy certs in US-east-1
-  provider = aws.us_east_1
-  domain_name = var.domain_name
-  validation_method = "DNS"
+  provider                  = aws.us_east_1
+  domain_name               = var.domain_name
+  validation_method         = "DNS"
   subject_alternative_names = ["www.${var.domain_name}"]
 
   lifecycle {
@@ -55,8 +55,8 @@ resource "aws_acm_certificate" "website" {
 }
 
 resource "aws_cloudfront_origin_access_control" "website" {
-  name = "${aws_s3_bucket.website.id}-oac"
-  description = "Signed access to the private portfolio bucket"
+  name                              = "${aws_s3_bucket.website.id}-oac"
+  description                       = "Signed access to the private portfolio bucket"
   origin_access_control_origin_type = "s3"
   # always signing using SigV4 and HTTPS between CloudFront and S3.
   signing_behavior = "always"
@@ -64,18 +64,18 @@ resource "aws_cloudfront_origin_access_control" "website" {
 }
 
 resource "aws_cloudfront_distribution" "website" {
-  enabled = true
-  is_ipv6_enabled = true
+  enabled             = true
+  is_ipv6_enabled     = true
   default_root_object = "index.html"
-  aliases = [var.domain_name, "www.${var.domain_name}"]
-  http_version = "http2and3"
-  price_class = "PriceClass_100"
-  comment = "Portfolio: ${var.var.domain_name}"
+  aliases             = [var.domain_name, "www.${var.domain_name}"]
+  http_version        = "http2and3"
+  price_class         = "PriceClass_100"
+  comment             = "Portfolio: ${var.domain_name}"
 
   origin {
     # OAC requires the S3 REST endpoint, not an S3 website endpoint.
-    domain_name = aws_s3_bucket.website.bucket_regional_domain_name
-    origin_id = "portfolio-s3"
+    domain_name              = aws_s3_bucket.website.bucket_regional_domain_name
+    origin_id                = "portfolio-s3"
     origin_access_control_id = aws_cloudfront_origin_access_control.website.id
   }
 
@@ -105,8 +105,8 @@ resource "aws_cloudfront_distribution" "website" {
 
 data "aws_iam_policy_document" "website" {
   statement {
-    sid = "AllowCloudFrontReadOnly"
-    actions = ["s3:GetObject"]
+    sid       = "AllowCloudFrontReadOnly"
+    actions   = ["s3:GetObject"]
     resources = ["${aws_s3_bucket.website.arn}/*"]
 
     principals {

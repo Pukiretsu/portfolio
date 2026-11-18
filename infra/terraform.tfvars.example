@@ -1,0 +1,4 @@
+domain_name        = "yourdomain.com"
+aws_region         = "us-west-2"
+cloudflare_zone_id = "0123456789abcdef0123456789abcdef"
+# Supply the token through TF_VAR_cloudflare_api_token rather than this file.
