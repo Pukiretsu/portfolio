@@ -1,3 +1,5 @@
+data "aws_caller_identity" "current" {}
+
 data "aws_cloudfront_cache_policy" "website" {
   name = "Managed-CachingOptimized"
 }
@@ -7,7 +9,7 @@ data "aws_cloudfront_response_headers_policy" "security" {
 }
 
 resource "aws_s3_bucket" "website" {
-  bucket_prefix = "portfolio-"
+  bucket_prefix = "${data.aws_caller_identity.current.account_id}-portfolio-"
   force_destroy = false
 }
 
