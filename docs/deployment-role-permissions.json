@@ -1,0 +1,34 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadCloudFrontResponseHeadersPolicies",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:ListResponseHeadersPolicies",
+        "cloudfront:GetResponseHeadersPolicy"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ReadPortfolioBucketConfiguration",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetBucketAcl",
+        "s3:GetAccelerateConfiguration",
+        "s3:GetBucketRequestPayment",
+        "s3:GetBucketLogging",
+        "s3:GetLifecycleConfiguration",
+        "s3:GetReplicationConfiguration",
+        "s3:GetBucketObjectLockConfiguration"
+      ],
+      "Resource": "arn:aws:s3:::458302836200-portfolio-*"
+    },
+    {
+      "Sid": "CreateTaggedCloudFrontDistribution",
+      "Effect": "Allow",
+      "Action": "cloudfront:CreateDistributionWithTags",
+      "Resource": "arn:aws:cloudfront::458302836200:distribution/*"
+    }
+  ]
+}
