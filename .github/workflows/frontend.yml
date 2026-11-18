@@ -1,0 +1,116 @@
+name: Deploy frontend
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portfolio-frontend-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Vue application
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build production files
+        run: npm run build
+      - name: Verify entry point
+        run: test -s dist/index.html
+      - name: Save production build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  deploy:
+    name: Upload to S3 and refresh CloudFront
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # Issue a short-lived AWS OIDC token; no stored AWS access keys.
+      id-token: write
+    env:
+      BUCKET_NAME: ${{ vars.BUCKET_NAME }}
+      DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+      AWS_PAGER: ''
+    steps:
+      - name: Download the verified build
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+      - name: Verify deployment inputs
+        env:
+          ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          : "${ROLE_ARN:?Missing AWS_ROLE_ARN variable}"
+          : "${REGION:?Missing AWS_REGION variable}"
+          : "${BUCKET_NAME:?Missing BUCKET_NAME variable}"
+          : "${DISTRIBUTION_ID:?Missing CLOUDFRONT_DISTRIBUTION_ID variable}"
+          test -s dist/index.html
+      - name: Authenticate with AWS OIDC
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: portfolio-frontend-${{ github.run_id }}
+          unset-current-credentials: true
+      - name: Upload assets, then publish HTML
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Hashed assets are immutable; upload them before the new HTML references them.
+          aws s3 sync dist/ "s3://$BUCKET_NAME/" \
+            --exclude '*.html' --exclude 'assets/*' \
+            --cache-control 'public,max-age=300' --only-show-errors
+          aws s3 sync dist/assets/ "s3://$BUCKET_NAME/assets/" \
+            --cache-control 'public,max-age=31536000,immutable' --only-show-errors
+          aws s3 cp dist/index.html "s3://$BUCKET_NAME/index.html" \
+            --content-type 'text/html' --cache-control 'no-cache,max-age=0,must-revalidate' \
+            --only-show-errors
+          # Retain old hashed assets so visitors with an older page can still load them.
+      - name: Invalidate cached pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          invalidation="$(aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" --paths '/*' \
+            --query 'Invalidation.Id' --output text)"
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "$DISTRIBUTION_ID" --id "$invalidation"
+          echo 'Frontend uploaded and CloudFront cache invalidated.' >> "$GITHUB_STEP_SUMMARY"

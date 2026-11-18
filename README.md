@@ -2,6 +2,14 @@
 
 Repository for my DevOps portfolio.
 
+## Frontend
+
+The Vue application lives in `frontend/`. Run `npm ci` and `npm run dev` from that folder to develop locally; `npm run build` generates `frontend/dist/`.
+
+The **Deploy frontend** workflow (`.github/workflows/frontend.yml`) builds pull requests and deploys frontend changes pushed to `main`. You can also select **Actions → Deploy frontend → Run workflow** on `main`. It uses the existing AWS OIDC role and repository variables `BUCKET_NAME` and `CLOUDFRONT_DISTRIBUTION_ID`, configured with the deployed infrastructure outputs. Update those variables if the bucket or distribution is replaced. No Cloudflare token is required for frontend deployments.
+
+Versioned assets are uploaded before HTML and cached as immutable. HTML is revalidated, and the workflow waits for CloudFront invalidation. Older hashed assets are retained for visitors with an older page; S3 versioning also retains prior uploads.
+
 Requires Terraform >= 1.10, AWS credentials, and an existing Cloudflare zone for the root domain with working nameserver delegation. The API token needs Zone DNS Edit permission scoped to that zone.
 
 ```sh

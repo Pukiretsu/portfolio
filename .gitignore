@@ -7,3 +7,7 @@ terraform.tfvars
 crash.log
 crash.*.log
 .tokens
+node_modules/
+frontend/dist/
+frontend/.env*
+!frontend/.env.example
