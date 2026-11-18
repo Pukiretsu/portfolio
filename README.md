@@ -1,5 +1,7 @@
 # Portfolio infrastructure
 
+Repository for my DevOps portfolio.
+
 Requires Terraform >= 1.10, AWS credentials, and an existing Cloudflare zone for the root domain with working nameserver delegation. The API token needs Zone DNS Edit permission scoped to that zone.
 
 ```sh
