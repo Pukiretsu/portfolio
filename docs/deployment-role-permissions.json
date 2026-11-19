@@ -59,7 +59,6 @@
         "cognito-idp:DeleteUserPoolClient",
         "cognito-idp:CreateUserPoolDomain",
         "cognito-idp:UpdateUserPoolDomain",
-        "cognito-idp:DescribeUserPoolDomain",
         "cognito-idp:DeleteUserPoolDomain",
         "cognito-idp:AdminGetUser",
         "cognito-idp:AdminCreateUser"
@@ -78,6 +77,22 @@
         "cloudfront:DeleteFunction"
       ],
       "Resource": "arn:aws:cloudfront::458302836200:function/portfolio-458302836200-spa-routes"
+    },
+    {
+      "Sid": "ReadCognitoDomainStatus",
+      "Effect": "Allow",
+      "Action": "cognito-idp:DescribeUserPoolDomain",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ManageAuthConfigurationTags",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObjectTagging",
+        "s3:PutObjectTagging",
+        "s3:DeleteObjectTagging"
+      ],
+      "Resource": "arn:aws:s3:::458302836200-portfolio-*/auth-config.json"
     }
   ]
 }
