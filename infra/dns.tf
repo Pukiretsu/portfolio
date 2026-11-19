@@ -17,17 +17,6 @@ resource "cloudflare_record" "certificate_validation" {
   proxied = false
 }
 
-resource "aws_acm_certificate_validation" "website" {
-  provider        = aws.us_east_1
-  certificate_arn = aws_acm_certificate.website.arn
-  # This dependency waits for Cloudflare records, then ACM issuance, before CloudFront.
-  validation_record_fqdns = [for record in cloudflare_record.certificate_validation : record.hostname]
-
-  timeouts {
-    create = "45m"
-  }
-}
-
 resource "cloudflare_record" "website" {
   for_each = toset([var.domain_name, "www.${var.domain_name}"])
 

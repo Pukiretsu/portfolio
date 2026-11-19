@@ -27,3 +27,23 @@ output "certificate_arn" {
   description = "Validated ACM certificate in us-east-1."
   value       = aws_acm_certificate_validation.website.certificate_arn
 }
+
+output "cognito_user_pool_id" {
+  description = "User pool where the administrator creates personal Tools accounts."
+  value       = aws_cognito_user_pool.tools.id
+}
+
+output "cognito_client_id" {
+  description = "Public browser app client ID (no client secret)."
+  value       = aws_cognito_user_pool_client.tools.id
+}
+
+output "cognito_login_domain" {
+  description = "Cognito-hosted login domain."
+  value       = "https://${aws_cognito_user_pool_domain.tools.domain}.auth.${var.aws_region}.amazoncognito.com"
+}
+
+output "tools_url" {
+  description = "Tools page; unauthenticated visitors are sent to login."
+  value       = "https://${var.domain_name}/tools"
+}

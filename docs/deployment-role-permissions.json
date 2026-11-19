@@ -29,6 +29,55 @@
       "Effect": "Allow",
       "Action": "cloudfront:CreateDistributionWithTags",
       "Resource": "arn:aws:cloudfront::458302836200:distribution/*"
+    },
+    {
+      "Sid": "CreatePortfolioCognitoPool",
+      "Effect": "Allow",
+      "Action": "cognito-idp:CreateUserPool",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "portfolio"
+        }
+      }
+    },
+    {
+      "Sid": "ManagePortfolioCognito",
+      "Effect": "Allow",
+      "Action": [
+        "cognito-idp:DescribeUserPool",
+        "cognito-idp:UpdateUserPool",
+        "cognito-idp:DeleteUserPool",
+        "cognito-idp:GetUserPoolMfaConfig",
+        "cognito-idp:SetUserPoolMfaConfig",
+        "cognito-idp:TagResource",
+        "cognito-idp:UntagResource",
+        "cognito-idp:ListTagsForResource",
+        "cognito-idp:CreateUserPoolClient",
+        "cognito-idp:DescribeUserPoolClient",
+        "cognito-idp:UpdateUserPoolClient",
+        "cognito-idp:DeleteUserPoolClient",
+        "cognito-idp:CreateUserPoolDomain",
+        "cognito-idp:UpdateUserPoolDomain",
+        "cognito-idp:DescribeUserPoolDomain",
+        "cognito-idp:DeleteUserPoolDomain",
+        "cognito-idp:AdminGetUser",
+        "cognito-idp:AdminCreateUser"
+      ],
+      "Resource": "arn:aws:cognito-idp:us-east-1:458302836200:userpool/*"
+    },
+    {
+      "Sid": "ManagePortfolioSpaRoutingFunction",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:CreateFunction",
+        "cloudfront:DescribeFunction",
+        "cloudfront:GetFunction",
+        "cloudfront:UpdateFunction",
+        "cloudfront:PublishFunction",
+        "cloudfront:DeleteFunction"
+      ],
+      "Resource": "arn:aws:cloudfront::458302836200:function/portfolio-458302836200-spa-routes"
     }
   ]
 }

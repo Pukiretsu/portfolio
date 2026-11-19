@@ -6,11 +6,14 @@ on:
     paths:
       - 'infra/**'
       - '.github/workflows/deploy.yml'
+      - '.github/scripts/invite-tools-user.py'
   push:
     branches: [main]
     paths:
       - 'infra/**'
       - '.github/workflows/deploy.yml'
+      - '.github/scripts/invite-tools-user.py'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -57,7 +60,7 @@ jobs:
   apply:
     name: Plan and apply infrastructure
     needs: check
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -124,6 +127,14 @@ jobs:
       - name: Report unchanged infrastructure
         if: steps.plan.outputs.changed == 'false'
         run: echo 'No infrastructure changes; apply skipped.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Invite personal Tools account if configured
+        env:
+          TOOLS_ADMIN_EMAIL: ${{ secrets.TOOLS_ADMIN_EMAIL }}
+        run: |
+          set -euo pipefail
+          COGNITO_USER_POOL_ID="$(terraform output -raw cognito_user_pool_id)"
+          export COGNITO_USER_POOL_ID
+          python3 ../.github/scripts/invite-tools-user.py
       - name: Remove sensitive plan
         if: always()
         run: rm -f deployment.tfplan

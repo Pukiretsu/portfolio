@@ -59,3 +59,25 @@ Grant the role permissions to manage the AWS resources in this configuration (S3
 If existing infrastructure was deployed with local state, migrate that state once using `terraform init -migrate-state` with the same backend settings before enabling CI. Do not let CI start with empty state for existing resources. Protect pushes to `main`, since every push can change infrastructure. The backend bucket, key, and region are explicitly configured in `infra/providers.tf`; CI does not override them.
 
 The current GitHub OIDC subject includes immutable owner and repository IDs, as confirmed in CloudTrail. The deployment role also has the supplemental permissions in `docs/deployment-role-permissions.json`, in addition to the existing `website-hosting` policy. Its trust policy is recorded in `docs/deployment-role-trust.json`. These bootstrap IAM settings are managed outside the website Terraform stack.
+
+## Personal Tools and Cognito
+
+Terraform is split by service while retaining existing resource addresses:
+
+- `infra/main.tf`: shared data sources.
+- `infra/storage.tf`: private S3 bucket and its access policy.
+- `infra/cdn.tf` and `infra/functions/spa-routes.js`: CloudFront, OAC, and explicit Vue route rewrites.
+- `infra/certificates.tf`: ACM certificates and validation waiter.
+- `infra/dns.tf`: Cloudflare routing and ACM validation records.
+- `infra/cognito.tf`: invitation-only user pool, public OAuth client, hosted login domain, and public runtime configuration.
+- `infra/providers.tf`, `infra/variables.tf`, `infra/outputs.tf`: providers/backend, inputs, and outputs.
+
+Visit `/tools` to sign in via `/login`. Cognito handles passwords, password reset, initial password changes, and mandatory authenticator-app MFA enrollment. The browser uses authorization code + PKCE, state, and nonce through `oidc-client-ts`. The public client has no secret. Tokens are kept in tab-scoped sessionStorage, expire after 15 minutes, and are removed on logout or expiry. Logout revokes the refresh token and clears the hosted login session. Cognito-issued JWTs are not instantly invalidated for every external verifier by logging out; future APIs must enforce expiry and their own authorization policy.
+
+Set repository Actions secret **`TOOLS_ADMIN_EMAIL`** to the address you want to invite. On the next infrastructure run, the workflow creates that user only if it does not exist and Cognito emails a generated temporary password. Complete the password change and register an authenticator when signing in. Neither passwords nor the account email are Terraform variables or state. If you add the secret later, use **Actions → Terraform infrastructure → Run workflow → main**; even an unchanged plan checks for the invitation. Existing users are not recreated or resent invitations. Changing the secret can invite another user; it does not delete previous users. Manage users and invitation resends in the Cognito console. Never put temporary or permanent passwords in GitHub secrets or Terraform configuration.
+
+`/auth-config.json` contains only the public issuer, app-client ID, and Cognito domain, is managed by Terraform, and bypasses CloudFront caching. The frontend upload workflow intentionally preserves this object. Both root and www have exact callback and logout URLs. Localhost is not registered by default; use a separate development app client for local sign-in testing.
+
+The Tools route is a client-side sign-in gate over a public static application. It does not make downloaded HTML/JS private or grant AWS credentials. The starter JSON workbench runs only in the browser. Any future tool that accesses private data or executes cloud operations must use a backend that validates the Cognito access token's signature, issuer, expiry, token_use, client ID, and required permissions. Do not put private data or service secrets in the static bundle. No unauthenticated Cognito identity pool is provisioned.
+
+The Cognito user pool has deletion protection and Terraform `prevent_destroy`. Do not disable them unless intentionally deleting accounts. The deployment role's additional Cognito and CloudFront-function permissions are recorded in `docs/deployment-role-permissions.json` and must be applied by an administrator before the first run.
