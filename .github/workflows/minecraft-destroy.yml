@@ -36,7 +36,6 @@ jobs:
       TF_VAR_accept_eula: ${{ vars.MINECRAFT_ACCEPT_EULA || 'false' }}
       TF_VAR_minecraft_version: ${{ vars.MINECRAFT_VERSION || '1.21.11' }}
       TF_VAR_whitelist: ${{ vars.MINECRAFT_WHITELIST || '[]' }}
-      INVENTORY_FILE: ${{ runner.temp }}/minecraft-destroy-inventory.json
       AWS_PAGER: ''
     steps:
       - uses: actions/checkout@v6
@@ -61,12 +60,16 @@ jobs:
       - name: Initialize the same Minecraft state
         run: terraform init -input=false -lockfile=readonly
       - name: Validate Terraform and capture resource inventory
+        env:
+          INVENTORY_FILE: ${{ runner.temp }}/minecraft-destroy-inventory.json
         run: |
           terraform validate
           python3 ../../.github/scripts/minecraft-control.py snapshot
       - name: Destroy server, disks, network and DNS
         run: terraform destroy -input=false -auto-approve -lock-timeout=5m
       - name: Verify complete teardown
+        env:
+          INVENTORY_FILE: ${{ runner.temp }}/minecraft-destroy-inventory.json
         run: python3 ../../.github/scripts/minecraft-control.py verify-destroy
       - name: Publish operation result
         if: always()

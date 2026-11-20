@@ -6,6 +6,8 @@ on:
     paths:
       - 'infra/**'
       - '.github/workflows/deploy.yml'
+      - '.github/workflows/minecraft-*.yml'
+      - '.github/scripts/minecraft-*.py'
       - '.github/scripts/invite-tools-user.py'
       - '.github/scripts/store-minecraft-token.py'
       - 'backend/**'
@@ -14,6 +16,8 @@ on:
     paths:
       - 'infra/**'
       - '.github/workflows/deploy.yml'
+      - '.github/workflows/minecraft-*.yml'
+      - '.github/scripts/minecraft-*.py'
       - '.github/scripts/invite-tools-user.py'
       - '.github/scripts/store-minecraft-token.py'
       - 'backend/**'
@@ -51,6 +55,15 @@ jobs:
           tflint_version: v0.59.1
       - name: Check formatting
         run: terraform fmt -check -recursive
+      - name: Lint GitHub Actions workflows
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            -o "$RUNNER_TEMP/actionlint.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes= ../.github/workflows/*.yml
       # PR checks need neither cloud credentials nor access to production state.
       - name: Initialize providers
         run: terraform init -backend=false -input=false -lockfile=readonly

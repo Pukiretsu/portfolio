@@ -69,15 +69,17 @@ data "archive_file" "minecraft_proxy" {
   }
 }
 resource "aws_lambda_function" "minecraft_proxy" {
-  function_name                  = "portfolio-minecraft-proxy"
-  role                           = aws_iam_role.minecraft_proxy.arn
-  runtime                        = "python3.13"
-  handler                        = "app.handler"
-  filename                       = data.archive_file.minecraft_proxy.output_path
-  source_code_hash               = data.archive_file.minecraft_proxy.output_base64sha256
-  timeout                        = 20
-  memory_size                    = 256
-  reserved_concurrent_executions = 4
+  function_name    = "portfolio-minecraft-proxy"
+  role             = aws_iam_role.minecraft_proxy.arn
+  runtime          = "python3.13"
+  handler          = "app.handler"
+  filename         = data.archive_file.minecraft_proxy.output_path
+  source_code_hash = data.archive_file.minecraft_proxy.output_base64sha256
+  timeout          = 20
+  memory_size      = 256
+  # Use the account pool: small/new AWS accounts cannot reserve concurrency below
+  # AWS's unreserved minimum. The authenticated API is independently throttled.
+  reserved_concurrent_executions = -1
   environment {
     variables = {
       TABLE_NAME     = aws_dynamodb_table.minecraft.name
@@ -133,8 +135,8 @@ resource "aws_apigatewayv2_stage" "minecraft" {
   name        = "$default"
   auto_deploy = true
   default_route_settings {
-    throttling_burst_limit = 10
-    throttling_rate_limit  = 5
+    throttling_burst_limit = 4
+    throttling_rate_limit  = 2
   }
 }
 resource "aws_lambda_permission" "minecraft_gateway" {
