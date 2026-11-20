@@ -59,6 +59,8 @@ jobs:
           : "${TF_VAR_cloudflare_zone_id:?Missing CLOUDFLARE_ZONE_ID}"
           : "${TF_VAR_cloudflare_api_token:?Missing CLOUDFLARE_API_TOKEN}"
           test "$TF_VAR_accept_eula" = true || { echo 'Accept the Minecraft EULA and set MINECRAFT_ACCEPT_EULA=true first.'; exit 1; }
+      - name: Refuse to replace an existing server or world
+        run: python3 ../../.github/scripts/minecraft-control.py ensure-offline
       - name: Initialize isolated Minecraft state
         run: terraform init -input=false -lockfile=readonly
       - name: Check Terraform

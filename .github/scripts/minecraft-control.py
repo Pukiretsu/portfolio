@@ -106,6 +106,15 @@ def snapshot():
     Path(os.environ["INVENTORY_FILE"]).write_text(json.dumps(outputs()))
 
 
+def ensure_offline():
+    response = aws("ec2", "describe-instances", "--filters", json.dumps([
+        {"Name": "tag:Project", "Values": ["portfolio-minecraft"]},
+        {"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped", "shutting-down"]},
+    ]))
+    if any(reservation.get("Instances") for reservation in response.get("Reservations", [])):
+        raise RuntimeError("A Minecraft instance already exists. Use the confirmed destroy workflow before launching again; this prevents AMI updates replacing a live world.")
+
+
 def verify_destroy():
     values = json.loads(Path(os.environ["INVENTORY_FILE"]).read_text())
     state = subprocess.run(["terraform", "state", "list"], capture_output=True, text=True, check=True)
@@ -128,13 +137,13 @@ def verify_destroy():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["begin", "finish", "verify-deploy", "snapshot", "verify-destroy"])
+    parser.add_argument("command", choices=["begin", "finish", "verify-deploy", "snapshot", "verify-destroy", "ensure-offline"])
     parser.add_argument("--action", choices=["deploy", "destroy"])
     args = parser.parse_args()
     if args.command in ("begin", "finish") and not args.action:
         parser.error("--action is required")
     try:
-        {"begin": lambda: begin(args.action), "finish": lambda: finish(args.action), "verify-deploy": verify_deploy, "snapshot": snapshot, "verify-destroy": verify_destroy}[args.command]()
+        {"begin": lambda: begin(args.action), "finish": lambda: finish(args.action), "verify-deploy": verify_deploy, "snapshot": snapshot, "verify-destroy": verify_destroy, "ensure-offline": ensure_offline}[args.command]()
     except Exception as error:
         print("Minecraft workflow check failed: " + str(error), file=sys.stderr)
         sys.exit(1)

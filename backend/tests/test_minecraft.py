@@ -2,6 +2,7 @@ import datetime
 import io
 import json
 import os
+import runpy
 from pathlib import Path
 import sys
 import unittest
@@ -134,6 +135,17 @@ class ProtocolTests(unittest.TestCase):
         context.__enter__.return_value = stream
         with patch("socket.create_connection", return_value=context), self.assertRaises(ValueError):
             protocol.ping("8.8.8.8", "mc.example.com")
+
+
+class WorkflowSafetyTests(unittest.TestCase):
+    def test_manual_launch_refuses_existing_instance(self):
+        script = Path(__file__).resolve().parents[2] / ".github/scripts/minecraft-control.py"
+        check = runpy.run_path(str(script))["ensure_offline"]
+        with patch.dict(check.__globals__, {"aws": lambda *args: {"Reservations": [{"Instances": [{"InstanceId": "existing"}]}]}}):
+            with self.assertRaises(RuntimeError):
+                check()
+        with patch.dict(check.__globals__, {"aws": lambda *args: {"Reservations": []}}):
+            check()
 
 
 if __name__ == "__main__":
