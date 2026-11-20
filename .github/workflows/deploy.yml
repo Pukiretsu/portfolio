@@ -7,12 +7,16 @@ on:
       - 'infra/**'
       - '.github/workflows/deploy.yml'
       - '.github/scripts/invite-tools-user.py'
+      - '.github/scripts/store-minecraft-token.py'
+      - 'backend/**'
   push:
     branches: [main]
     paths:
       - 'infra/**'
       - '.github/workflows/deploy.yml'
       - '.github/scripts/invite-tools-user.py'
+      - '.github/scripts/store-minecraft-token.py'
+      - 'backend/**'
   workflow_dispatch:
 
 permissions:
@@ -52,6 +56,12 @@ jobs:
         run: terraform init -backend=false -input=false -lockfile=readonly
       - name: Validate configuration
         run: terraform validate
+      - name: Validate isolated Minecraft configuration
+        run: |
+          terraform -chdir=minecraft init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=minecraft validate
+      - name: Test launcher backend
+        run: python3 -m unittest discover -s ../backend/tests -v
       - name: Lint Terraform
         run: |
           tflint --init
@@ -77,6 +87,7 @@ jobs:
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_domain_name: ${{ vars.DOMAIN_NAME }}
       TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      TF_VAR_minecraft_accept_eula: ${{ vars.MINECRAFT_ACCEPT_EULA || 'false' }}
       AWS_PAGER: ''
     steps:
       - uses: actions/checkout@v6
@@ -135,6 +146,14 @@ jobs:
           COGNITO_USER_POOL_ID="$(terraform output -raw cognito_user_pool_id)"
           export COGNITO_USER_POOL_ID
           python3 ../.github/scripts/invite-tools-user.py
+      - name: Store Minecraft dispatcher credential if configured
+        env:
+          MINECRAFT_GH_TOKEN: ${{ secrets.MINECRAFT_GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          MINECRAFT_SECRET_ARN="$(terraform output -raw minecraft_github_secret_arn)"
+          export MINECRAFT_SECRET_ARN
+          python3 ../.github/scripts/store-minecraft-token.py
       - name: Remove sensitive plan
         if: always()
         run: rm -f deployment.tfplan

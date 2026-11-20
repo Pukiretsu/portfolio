@@ -9,6 +9,7 @@ const router = createRouter({
     { path: '/login', component: () => import('./views/LoginView.vue'), meta: { title: 'Sign in · Angel Tools' } },
     { path: '/auth/callback', component: () => import('./views/AuthCallbackView.vue'), meta: { title: 'Signing in · Angel Tools' } },
     { path: '/tools', component: () => import('./views/ToolsView.vue'), meta: { requiresAuth: true, title: 'Tools · Angel' } },
+    { path: '/tools/minecraft', component: () => import('./views/MinecraftView.vue'), meta: { requiresAuth: true, title: 'Minecraft · Angel Tools' } },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
   scrollBehavior(to, from, savedPosition) {

@@ -47,3 +47,13 @@ output "tools_url" {
   description = "Tools page; unauthenticated visitors are sent to login."
   value       = "https://${var.domain_name}/tools"
 }
+
+output "minecraft_api_url" {
+  description = "Cognito-protected Minecraft control API."
+  value       = aws_apigatewayv2_api.minecraft.api_endpoint
+}
+
+output "minecraft_github_secret_arn" {
+  description = "Secret container to populate with the GitHub Actions-write token."
+  value       = aws_secretsmanager_secret.minecraft_github.arn
+}

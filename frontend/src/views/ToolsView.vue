@@ -40,7 +40,13 @@ async function logout() {
       <h1 class="font-display text-5xl font-medium tracking-tighter md:text-6xl">A place to <span class="text-accent">make things.</span></h1>
       <p class="mt-5 break-words text-sm text-muted">Signed in as <span class="text-soft">{{ name }}</span></p>
     </section>
-    <section class="mt-12 max-w-4xl rounded-xl border border-line bg-panel p-6 md:p-8" aria-labelledby="json-title">
+    <RouterLink to="/tools/minecraft" class="mt-10 block max-w-4xl rounded-xl border border-line bg-panel p-6 transition hover:border-accent/60 md:p-8">
+      <span class="eyebrow">ON-DEMAND SERVER</span>
+      <h2 class="mt-3 !text-2xl !tracking-tight">Minecraft</h2>
+      <p class="mt-3 text-sm leading-7 text-muted">Launch a world, check live server status, and destroy the server when you're done.</p>
+      <span class="text-link mt-4 inline-block">Open launcher ↗</span>
+    </RouterLink>
+    <section class="mt-8 max-w-4xl rounded-xl border border-line bg-panel p-6 md:p-8" aria-labelledby="json-title">
       <div class="flex flex-wrap items-start justify-between gap-4"><div><h2 id="json-title" class="!text-2xl !tracking-tight">JSON workbench</h2><p class="mt-2 text-sm leading-7 text-muted">Format and inspect JSON. Everything stays in this browser tab.</p></div><span class="tag">LOCAL ONLY</span></div>
       <label for="json-input" class="mb-3 mt-7 block text-sm text-soft">Your JSON</label>
       <textarea id="json-input" v-model="input" rows="13" spellcheck="false" placeholder='{"hello": "world"}' class="w-full rounded-lg border border-line bg-base p-4 font-mono text-sm leading-6 text-ink" :aria-invalid="invalid" aria-describedby="json-status"></textarea>

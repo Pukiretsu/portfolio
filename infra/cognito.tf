@@ -90,9 +90,10 @@ resource "aws_s3_object" "auth_config" {
   content_type  = "application/json"
   cache_control = "no-store,max-age=0"
   content = jsonencode({
-    authority = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.tools.id}"
-    clientId  = aws_cognito_user_pool_client.tools.id
-    domain    = "https://${aws_cognito_user_pool_domain.tools.domain}.auth.${var.aws_region}.amazoncognito.com"
+    authority    = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.tools.id}"
+    clientId     = aws_cognito_user_pool_client.tools.id
+    domain       = "https://${aws_cognito_user_pool_domain.tools.domain}.auth.${var.aws_region}.amazoncognito.com"
+    minecraftApi = aws_apigatewayv2_api.minecraft.api_endpoint
   })
   depends_on = [aws_s3_bucket_server_side_encryption_configuration.website]
 }

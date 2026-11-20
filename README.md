@@ -81,3 +81,59 @@ Set repository Actions secret **`TOOLS_ADMIN_EMAIL`** to the address you want to
 The Tools route is a client-side sign-in gate over a public static application. It does not make downloaded HTML/JS private or grant AWS credentials. The starter JSON workbench runs only in the browser. Any future tool that accesses private data or executes cloud operations must use a backend that validates the Cognito access token's signature, issuer, expiry, token_use, client ID, and required permissions. Do not put private data or service secrets in the static bundle. No unauthenticated Cognito identity pool is provisioned.
 
 The Cognito user pool has deletion protection and Terraform `prevent_destroy`. Do not disable them unless intentionally deleting accounts. The deployment role's additional Cognito and CloudFront-function permissions are recorded in `docs/deployment-role-permissions.json` and must be applied by an administrator before the first run.
+
+## On-demand Minecraft launcher
+
+The authenticated dashboard is `/tools/minecraft`, linked from Tools. It uses the existing Cognito access token; no additional shared password or GitHub token is exposed to the browser. API Gateway verifies the token signature, issuer, app client, expiry, and `openid` scope. Lambda also requires an access token. All invited Tools users can operate the launcher.
+
+### Files and state
+
+- `infra/minecraft-control.tf`: persistent HTTP API, Cognito authorizer, Lambda, DynamoDB operation lock, and Secrets Manager container.
+- `backend/minecraft_proxy/`: allowlisted GitHub dispatcher and bounded Minecraft Java Server List Ping implementation.
+- `infra/minecraft/`: independently destroyable dual-stack VPC, public subnet, game-only security group, EC2, encrypted root/world disk, and DNS-only Cloudflare A/AAAA records.
+- `.github/workflows/minecraft-deploy.yml` and `minecraft-destroy.yml`: manual/launcher dispatch workflows, serialized with one shared concurrency group.
+- `.github/scripts/minecraft-control.py`: operation leases, readiness and DNS verification, resource inventory, and teardown verification.
+- `frontend/src/views/MinecraftView.vue`: authenticated controls, destructive-action confirmation, and 10-second telemetry polling.
+
+Both Terraform roots use the **same existing bucket**, `458302836200-terraform-state-portfolio`. The portfolio/control plane uses `static-site/terraform.tfstate`; Minecraft uses `minecraft/terraform.tfstate`. Both use S3 native locking and encryption. Never point the Minecraft root at the portfolio state key. Destroying Minecraft does not destroy the website, login, API, or token container.
+
+### One-time setup
+
+1. An AWS administrator must add the reviewed permissions in `docs/minecraft-deployment-policy.json` to the existing `githubactions-portfolio` deployment role. The existing website/state permissions and OIDC main-branch trust remain required. This file scopes the Lambda execution role and secret to specific names; API Gateway and EC2 provisioning require dynamic resource IDs. Do not attach it to the runtime Lambda role, which Terraform manages with narrower permissions.
+2. Create a fine-grained GitHub token limited to **Pukiretsu/portfolio**, with **Actions: Read and write** and the repository metadata access GitHub supplies. Save it as Actions repository secret **`MINECRAFT_GH_TOKEN`**. Avoid a broad classic PAT; set an expiry and rotate it when needed.
+3. Keep the existing `CLOUDFLARE_API_TOKEN` secret and `AWS_ROLE_ARN`, `AWS_REGION`, `DOMAIN_NAME`, and `CLOUDFLARE_ZONE_ID` variables. The Cloudflare token needs DNS Edit for this zone. No extra state bucket is needed.
+4. Read and accept the Minecraft EULA at https://aka.ms/MinecraftEULA, then set repository variable **`MINECRAFT_ACCEPT_EULA`** to **`true`**. This setting is intentionally false by default. The deploy workflow and API both enforce it.
+5. Optional variables: **`MINECRAFT_VERSION`** (default `1.21.11`, Java Edition) and **`MINECRAFT_WHITELIST`** (a JSON array of Java player names, such as `["PlayerName"]`). An empty whitelist permits any Microsoft-authenticated Java player to join the public game port.
+6. Push the implementation and run **Terraform infrastructure** on `main`. It creates the control plane and copies `MINECRAFT_GH_TOKEN` securely into **`portfolio/minecraft/github-token`** in AWS Secrets Manager. The secret value is a **plain token string**, not a JSON object, and is never a Terraform input or state value. Re-run this workflow after changing the token or EULA setting. Then deploy the frontend.
+
+If storing the token manually, create the Terraform-managed container first, then use Secrets Manager's plaintext value editor for `portfolio/minecraft/github-token`. Do not pre-create a conflicting secret outside Terraform without importing it. The frontend receives only the public API URL via `auth-config.json`.
+
+### Operating the server
+
+Sign in, open **Tools → Minecraft**, and select **Launch Server**. The proxy accepts only the fixed deploy/destroy workflow names on `main`, acquires a conditional operation lease, and dispatches server-side with the stored credential. Duplicate or overlapping requests return a conflict. Both workflows share a GitHub concurrency group in addition to Terraform's state lock. The status endpoint probes only the tagged EC2 address, never a caller-supplied hostname or port.
+
+Launch creates a `t4g.medium` ARM instance and encrypted 30 GiB gp3 root/world disk. Amazon Linux installs Java 21; bootstrap downloads the pinned vanilla server from Mojang and checks its published checksum. Minecraft runs as a non-root systemd service. No SSH, RCON, client AWS credentials, or unauthenticated API is exposed. Port 25565 is public on IPv4 and IPv6. The default server memory is 2 GiB and player limit is 10. Edit `infra/minecraft/user-data.sh.tftpl` if needed.
+
+Connect to **`mc.angelgp.dev`** (or `mc.<DOMAIN_NAME>`) using the configured Minecraft Java version. Cloudflare proxying is disabled; CloudFront never carries the raw game connection. The public IPv4 also lets a non-VPC Lambda probe the game without a permanently billed NAT gateway. Probe latency is measured from Lambda, not from your own computer.
+
+Provisioning includes Java installation and world generation, so expect several minutes. The workflow verifies Cloudflare A/AAAA records, public AAAA resolution, and a successful Minecraft protocol response before declaring readiness. The dashboard reports players, slots, version, and latency. Failure messages link to the workflow; bootstrap logs are in `/var/log/minecraft-bootstrap.log` on the instance. A failed apply can leave resources, so use the destroy workflow for cleanup rather than deleting the state.
+
+**Stop / Destroy Server permanently deletes the server and its world data.** There is no backup or persistent-world promise in this version. The UI requires confirmation; manual destroy runs require the matching checkbox too. The destroy workflow snapshots resource IDs, runs `terraform destroy`, and checks terminated EC2, deleted EBS volumes, empty Minecraft state, and removed DNS records. DNS caches may retain the old address until its TTL expires.
+
+If a dispatch times out ambiguously, the safety lease remains for up to one hour to prevent duplicate launches. Check GitHub Actions first; do not clear a lease while a workflow is still running. A workflow normally releases its lease on success/failure/cancellation. A queued run that never starts may require waiting for lease expiry.
+
+No server launches automatically on push. Compute, EBS, and public IPv4 charges continue until teardown; there is no idle auto-shutdown. The lightweight control plane and Secrets Manager container persist while the game server is offline and have their own normal AWS charges.
+
+### Verification
+
+```sh
+terraform -chdir=infra init -backend=false
+terraform -chdir=infra validate
+terraform -chdir=infra/minecraft init -backend=false
+terraform -chdir=infra/minecraft validate
+terraform -chdir=infra fmt -check -recursive
+python3 -m unittest discover -s backend/tests -v
+npm --prefix frontend run build
+```
+
+These checks do not launch a game server. Full deploy/destroy testing requires the new IAM permissions, token, and explicit EULA acceptance.

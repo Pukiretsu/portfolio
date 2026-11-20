@@ -1,0 +1,76 @@
+name: Minecraft deploy
+on:
+  workflow_dispatch:
+    inputs:
+      operation_id:
+        description: 'Launcher operation ID (leave empty for manual runs)'
+        required: false
+        type: string
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: portfolio-minecraft
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+        working-directory: infra/minecraft
+    env:
+      TF_INPUT: 'false'
+      TF_IN_AUTOMATION: 'true'
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      TF_VAR_domain_name: ${{ vars.DOMAIN_NAME }}
+      TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      TF_VAR_accept_eula: ${{ vars.MINECRAFT_ACCEPT_EULA || 'false' }}
+      TF_VAR_minecraft_version: ${{ vars.MINECRAFT_VERSION || '1.21.11' }}
+      TF_VAR_whitelist: ${{ vars.MINECRAFT_WHITELIST || '[]' }}
+      AWS_PAGER: ''
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Authenticate to AWS with OIDC
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: minecraft-deploy-${{ github.run_id }}
+          role-duration-seconds: 3600
+          unset-current-credentials: true
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.9
+          terraform_wrapper: false
+      - name: Claim launcher operation
+        env:
+          INPUT_OPERATION_ID: ${{ inputs.operation_id }}
+        run: python3 ../../.github/scripts/minecraft-control.py begin --action deploy
+      - name: Verify required configuration
+        run: |
+          set -euo pipefail
+          : "${TF_VAR_domain_name:?Missing DOMAIN_NAME}"
+          : "${TF_VAR_cloudflare_zone_id:?Missing CLOUDFLARE_ZONE_ID}"
+          : "${TF_VAR_cloudflare_api_token:?Missing CLOUDFLARE_API_TOKEN}"
+          test "$TF_VAR_accept_eula" = true || { echo 'Accept the Minecraft EULA and set MINECRAFT_ACCEPT_EULA=true first.'; exit 1; }
+      - name: Initialize isolated Minecraft state
+        run: terraform init -input=false -lockfile=readonly
+      - name: Check Terraform
+        run: |
+          terraform fmt -check
+          terraform validate
+      - name: Deploy server and DNS
+        run: terraform apply -input=false -auto-approve -lock-timeout=5m
+      - name: Verify IPv6 DNS and Minecraft readiness
+        run: python3 ../../.github/scripts/minecraft-control.py verify-deploy
+      - name: Publish operation result
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: python3 ../../.github/scripts/minecraft-control.py finish --action deploy

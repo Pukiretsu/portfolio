@@ -40,3 +40,9 @@ variable "cloudflare_zone_id" {
     error_message = "Provide the 32-character hexadecimal Cloudflare zone ID."
   }
 }
+
+variable "minecraft_accept_eula" {
+  type        = bool
+  default     = false
+  description = "Enables launcher requests only after the owner accepts https://aka.ms/MinecraftEULA."
+}
