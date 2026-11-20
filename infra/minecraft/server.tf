@@ -14,9 +14,11 @@ resource "aws_instance" "server" {
     version                  = var.minecraft_version
     fabric_loader_version    = var.fabric_loader_version
     fabric_installer_version = var.fabric_installer_version
-    monitor_py               = file("${path.module}/../../backend/minecraft_proxy/activity_monitor.py")
-    activity_py              = file("${path.module}/../../backend/minecraft_proxy/activity.py")
-    protocol_py              = file("${path.module}/../../backend/minecraft_proxy/protocol.py")
+    fabric_api_version       = var.fabric_api_version
+    installer_gzip           = base64gzip(file("${path.module}/install-server.py"))
+    monitor_gzip             = base64gzip(file("${path.module}/../../backend/minecraft_proxy/activity_monitor.py"))
+    activity_gzip            = base64gzip(file("${path.module}/../../backend/minecraft_proxy/activity.py"))
+    protocol_gzip            = base64gzip(file("${path.module}/../../backend/minecraft_proxy/protocol.py"))
     aws_region               = var.aws_region
   })
   iam_instance_profile = aws_iam_instance_profile.activity.name

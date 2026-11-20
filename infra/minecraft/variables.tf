@@ -24,16 +24,16 @@ variable "accept_eula" {
 }
 variable "minecraft_version" {
   type        = string
-  default     = "1.21.11"
+  default     = "26.3"
   description = "Pinned Minecraft Java Edition release, downloaded from Mojang."
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+(\\.[0-9]+)?$", var.minecraft_version))
-    error_message = "Use a stable release number, for example 1.21.11."
+    error_message = "Use a stable release number, for example 26.3."
   }
 }
 variable "fabric_loader_version" {
   type    = string
-  default = "0.18.4"
+  default = "0.19.5"
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.fabric_loader_version))
     error_message = "Use a stable Fabric loader version."
@@ -45,5 +45,15 @@ variable "fabric_installer_version" {
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.fabric_installer_version))
     error_message = "Use a stable Fabric installer version."
+  }
+}
+
+variable "fabric_api_version" {
+  type        = string
+  default     = "0.166.2+26.3"
+  description = "Exact Fabric API version; must support minecraft_version."
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+[+][0-9.]+$", var.fabric_api_version))
+    error_message = "Use a Fabric API release such as 0.166.2+26.3."
   }
 }

@@ -1,39 +1,61 @@
 #!/bin/bash
 set -euo pipefail
 exec > >(tee -a /var/log/minecraft-bootstrap.log | logger -t minecraft-bootstrap -s 2>/dev/console) 2>&1
-dnf install -y java-21-amazon-corretto-headless python3 awscli-2
-useradd --system --home-dir /srv/minecraft --shell /sbin/nologin minecraft
+echo '[Java] Preparing ARM64 Temurin 25 and provisioning tools'
+[ "$(uname -m)" = aarch64 ] || { echo 'ERROR: aarch64 is required'; exit 1; }
+# AL2023 ships curl-minimal; avoid conflicting with it by installing only if missing.
+command -v curl >/dev/null || dnf install -y curl-minimal
+dnf install -y jq tar gzip python3 awscli-2 util-linux
+for tool in curl jq tar gzip python3 swapon mkswap; do
+  command -v "$tool" >/dev/null || { echo "ERROR: missing $tool"; exit 1; }
+done
+getent passwd minecraft >/dev/null || useradd --system --home-dir /srv/minecraft --shell /sbin/nologin minecraft
 install -d -o minecraft -g minecraft /srv/minecraft
 install -d /opt/minecraft
-python3 <<'PY'
-import hashlib, io, json, pathlib, urllib.request, zipfile
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+curl --fail --silent --show-error --location --retry 3 \
+  'https://api.adoptium.net/v3/assets/latest/25/hotspot?architecture=aarch64&image_type=jdk&os=linux&vendor=eclipse' > "$work/java.json"
+jq -e 'length > 0' "$work/java.json" >/dev/null
+java_url=$(jq -er '.[0].binary.package.link | select(startswith("https://"))' "$work/java.json")
+java_sha=$(jq -er '.[0].binary.package.checksum' "$work/java.json")
+java_release=$(jq -er '.[0].release_name | select(test("^[a-zA-Z0-9+._-]+$"))' "$work/java.json")
+java_home="/opt/minecraft/temurin-$java_release"
+if [ ! -x "$java_home/bin/java" ]; then
+  curl --fail --silent --show-error --location --retry 3 "$java_url" -o "$work/java.tar.gz"
+  echo "$java_sha  $work/java.tar.gz" | sha256sum --check -
+  mkdir "$work/jdk"
+  tar -xzf "$work/java.tar.gz" --strip-components=1 -C "$work/jdk"
+  "$work/jdk/bin/java" -version
+  mv "$work/jdk" "$java_home"
+fi
+ln -sfn "$java_home" /opt/minecraft/java
+/opt/minecraft/java/bin/java -XshowSettings:properties -version 2>&1 | tee "$work/java-settings"
+grep -Eq 'java.specification.version = 25$' "$work/java-settings"
+grep -Eq 'os.arch = aarch64$' "$work/java-settings"
 
-def get(url):
-    with urllib.request.urlopen(url, timeout=60) as response:
-        return response.read()
+echo '[Swap] Ensuring a 2G fallback with swappiness=10'
+if [ -z "$(swapon --show --noheadings)" ]; then
+  if [ ! -f /swapfile ]; then
+    # dd allocates physical blocks on AL2023 XFS (sparse files cannot be used as swap).
+    dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+    chmod 600 /swapfile
+    mkswap /swapfile
+  fi
+  chmod 600 /swapfile
+  swapon /swapfile
+  grep -qE '^/swapfile[[:space:]]' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+echo 'vm.swappiness=10' > /etc/sysctl.d/90-minecraft-swap.conf
+sysctl -p /etc/sysctl.d/90-minecraft-swap.conf
 
-manifest = json.loads(get('https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'))
-entry = next(item for item in manifest['versions'] if item['id'] == '${version}')
-metadata = json.loads(get(entry['url']))
-download = metadata['downloads']['server']
-jar = get(download['url'])
-if hashlib.sha1(jar).hexdigest() != download['sha1']:
-    raise RuntimeError('Mojang server checksum mismatch')
-pathlib.Path('/srv/minecraft/server.jar').write_bytes(jar)
-launcher = get('https://meta.fabricmc.net/v2/versions/loader/${version}/${fabric_loader_version}/${fabric_installer_version}/server/jar')
-with zipfile.ZipFile(io.BytesIO(launcher)) as archive:
-    if archive.testzip() is not None:
-        raise RuntimeError('Fabric launcher archive is corrupt')
-pathlib.Path('/srv/minecraft/fabric-server-launch.jar').write_bytes(launcher)
-properties = '\n'.join([
-    'server-port=25565', 'online-mode=false', 'enforce-secure-profile=false', 'enable-rcon=false',
-    'enable-query=false', 'max-players=10', 'view-distance=8',
-    'simulation-distance=6', 'motd=Angel - on-demand Minecraft',
-    'white-list=false', 'enforce-whitelist=false',
-])
-pathlib.Path('/srv/minecraft/server.properties').write_text(properties + '\n')
-pathlib.Path('/srv/minecraft/eula.txt').write_text('eula=true\n')
-PY
+# Stop Java before updating managed JARs. Terraform remains the only resource destroyer.
+if systemctl cat minecraft.service >/dev/null 2>&1; then
+  systemctl stop minecraft.service
+fi
+# Compression keeps the complete EC2 user-data below its 16 KiB limit.
+echo '${installer_gzip}' | base64 --decode | gzip --decompress > /opt/minecraft/install-server.py
+python3 /opt/minecraft/install-server.py '${version}' '${fabric_loader_version}' '${fabric_installer_version}' '${fabric_api_version}'
 chown -R minecraft:minecraft /srv/minecraft
 cat > /etc/systemd/system/minecraft.service <<'SERVICE'
 [Unit]
@@ -44,7 +66,7 @@ Wants=network-online.target
 User=minecraft
 Group=minecraft
 WorkingDirectory=/srv/minecraft
-ExecStart=/usr/bin/java -Xms1G -Xmx2G -jar /srv/minecraft/fabric-server-launch.jar nogui
+ExecStart=/opt/minecraft/java/bin/java -Xms2800M -Xmx2800M -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=100 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:InitiatingHeapOccupancyPercent=15 -jar /srv/minecraft/fabric-server-launch.jar nogui
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=120
@@ -55,24 +77,22 @@ ProtectHome=yes
 ProtectSystem=strict
 ReadWritePaths=/srv/minecraft
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-MemoryMax=3G
+# Allow native/off-heap overhead above the 2800M heap; retain OS headroom.
+MemoryHigh=3400M
+MemoryMax=3584M
+MemorySwapMax=2G
 [Install]
 WantedBy=multi-user.target
 SERVICE
 systemctl daemon-reload
-systemctl enable --now minecraft
+systemctl enable minecraft
+systemctl restart minecraft
 
 # Root-owned monitor code cannot be replaced by the unprivileged game process.
 install -d /opt/minecraft-monitor
-cat > /opt/minecraft-monitor/activity_monitor.py <<'ACTIVITY_MONITOR_PY'
-${monitor_py}
-ACTIVITY_MONITOR_PY
-cat > /opt/minecraft-monitor/activity.py <<'ACTIVITY_POLICY_PY'
-${activity_py}
-ACTIVITY_POLICY_PY
-cat > /opt/minecraft-monitor/protocol.py <<'MINECRAFT_PROTOCOL_PY'
-${protocol_py}
-MINECRAFT_PROTOCOL_PY
+echo '${monitor_gzip}' | base64 --decode | gzip --decompress > /opt/minecraft-monitor/activity_monitor.py
+echo '${activity_gzip}' | base64 --decode | gzip --decompress > /opt/minecraft-monitor/activity.py
+echo '${protocol_gzip}' | base64 --decode | gzip --decompress > /opt/minecraft-monitor/protocol.py
 cat > /etc/systemd/system/minecraft-activity.service <<'MONITOR_SERVICE'
 [Unit]
 Description=Minecraft activity tracking and graceful idle stop
