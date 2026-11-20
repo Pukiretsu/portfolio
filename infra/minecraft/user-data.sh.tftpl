@@ -1,12 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 exec > >(tee -a /var/log/minecraft-bootstrap.log | logger -t minecraft-bootstrap -s 2>/dev/console) 2>&1
-dnf install -y java-21-amazon-corretto-headless python3
+dnf install -y java-21-amazon-corretto-headless python3 awscli-2
 useradd --system --home-dir /srv/minecraft --shell /sbin/nologin minecraft
 install -d -o minecraft -g minecraft /srv/minecraft
 install -d /opt/minecraft
 python3 <<'PY'
-import hashlib, json, pathlib, urllib.request, uuid
+import hashlib, io, json, pathlib, urllib.request, zipfile
 
 def get(url):
     with urllib.request.urlopen(url, timeout=60) as response:
@@ -19,19 +19,17 @@ download = metadata['downloads']['server']
 jar = get(download['url'])
 if hashlib.sha1(jar).hexdigest() != download['sha1']:
     raise RuntimeError('Mojang server checksum mismatch')
-pathlib.Path('/opt/minecraft/server.jar').write_bytes(jar)
-names = json.loads('${whitelist}')
-players = []
-for name in names:
-    profile = json.loads(get('https://api.mojang.com/users/profiles/minecraft/' + name))
-    players.append({'uuid': str(uuid.UUID(profile['id'])), 'name': profile['name']})
-pathlib.Path('/srv/minecraft/whitelist.json').write_text(json.dumps(players))
+pathlib.Path('/srv/minecraft/server.jar').write_bytes(jar)
+launcher = get('https://meta.fabricmc.net/v2/versions/loader/${version}/${fabric_loader_version}/${fabric_installer_version}/server/jar')
+with zipfile.ZipFile(io.BytesIO(launcher)) as archive:
+    if archive.testzip() is not None:
+        raise RuntimeError('Fabric launcher archive is corrupt')
+pathlib.Path('/srv/minecraft/fabric-server-launch.jar').write_bytes(launcher)
 properties = '\n'.join([
-    'server-port=25565', 'online-mode=true', 'enable-rcon=false',
+    'server-port=25565', 'online-mode=false', 'enforce-secure-profile=false', 'enable-rcon=false',
     'enable-query=false', 'max-players=10', 'view-distance=8',
     'simulation-distance=6', 'motd=Angel - on-demand Minecraft',
-    'white-list=' + str(bool(names)).lower(),
-    'enforce-whitelist=' + str(bool(names)).lower(),
+    'white-list=false', 'enforce-whitelist=false',
 ])
 pathlib.Path('/srv/minecraft/server.properties').write_text(properties + '\n')
 pathlib.Path('/srv/minecraft/eula.txt').write_text('eula=true\n')
@@ -39,14 +37,14 @@ PY
 chown -R minecraft:minecraft /srv/minecraft
 cat > /etc/systemd/system/minecraft.service <<'SERVICE'
 [Unit]
-Description=On-demand Minecraft Java server
+Description=On-demand Fabric Minecraft server
 After=network-online.target
 Wants=network-online.target
 [Service]
 User=minecraft
 Group=minecraft
 WorkingDirectory=/srv/minecraft
-ExecStart=/usr/bin/java -Xms1G -Xmx2G -jar /opt/minecraft/server.jar nogui
+ExecStart=/usr/bin/java -Xms1G -Xmx2G -jar /srv/minecraft/fabric-server-launch.jar nogui
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=120
@@ -63,3 +61,36 @@ WantedBy=multi-user.target
 SERVICE
 systemctl daemon-reload
 systemctl enable --now minecraft
+
+# Root-owned monitor code cannot be replaced by the unprivileged game process.
+install -d /opt/minecraft-monitor
+cat > /opt/minecraft-monitor/activity_monitor.py <<'ACTIVITY_MONITOR_PY'
+${monitor_py}
+ACTIVITY_MONITOR_PY
+cat > /opt/minecraft-monitor/activity.py <<'ACTIVITY_POLICY_PY'
+${activity_py}
+ACTIVITY_POLICY_PY
+cat > /opt/minecraft-monitor/protocol.py <<'MINECRAFT_PROTOCOL_PY'
+${protocol_py}
+MINECRAFT_PROTOCOL_PY
+cat > /etc/systemd/system/minecraft-activity.service <<'MONITOR_SERVICE'
+[Unit]
+Description=Minecraft activity tracking and graceful idle stop
+After=network-online.target minecraft.service
+Wants=network-online.target
+[Service]
+ExecStart=/usr/bin/python3 /opt/minecraft-monitor/activity_monitor.py
+Environment=AWS_DEFAULT_REGION=${aws_region}
+StateDirectory=minecraft-monitor
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+[Install]
+WantedBy=multi-user.target
+MONITOR_SERVICE
+systemctl daemon-reload
+systemctl enable --now minecraft-activity

@@ -31,12 +31,19 @@ variable "minecraft_version" {
     error_message = "Use a stable release number, for example 1.21.11."
   }
 }
-variable "whitelist" {
-  type        = list(string)
-  default     = []
-  description = "Optional Java account names. Empty means any authenticated player can join."
+variable "fabric_loader_version" {
+  type    = string
+  default = "0.18.4"
   validation {
-    condition     = alltrue([for name in var.whitelist : can(regex("^[A-Za-z0-9_]{3,16}$", name))])
-    error_message = "Whitelist entries must be Java account names of 3–16 letters, digits or underscores."
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.fabric_loader_version))
+    error_message = "Use a stable Fabric loader version."
+  }
+}
+variable "fabric_installer_version" {
+  type    = string
+  default = "1.1.1"
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.fabric_installer_version))
+    error_message = "Use a stable Fabric installer version."
   }
 }

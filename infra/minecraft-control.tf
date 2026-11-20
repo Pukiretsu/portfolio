@@ -7,6 +7,10 @@ resource "aws_dynamodb_table" "minecraft" {
     name = "pk"
     type = "S"
   }
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
 }
 
 resource "aws_secretsmanager_secret" "minecraft_github" {
@@ -67,6 +71,10 @@ data "archive_file" "minecraft_proxy" {
     content  = file("${path.module}/../backend/minecraft_proxy/protocol.py")
     filename = "protocol.py"
   }
+  source {
+    content  = file("${path.module}/../backend/minecraft_proxy/activity.py")
+    filename = "activity.py"
+  }
 }
 resource "aws_lambda_function" "minecraft_proxy" {
   function_name    = "portfolio-minecraft-proxy"
@@ -88,6 +96,7 @@ resource "aws_lambda_function" "minecraft_proxy" {
       COGNITO_CLIENT = aws_cognito_user_pool_client.tools.id
       SERVER_ADDRESS = "mc.${var.domain_name}"
       ACCEPT_EULA    = tostring(var.minecraft_accept_eula)
+      IDLE_RULE_ARN  = aws_cloudwatch_event_rule.minecraft_idle.arn
     }
   }
   depends_on = [aws_iam_role_policy.minecraft_proxy, aws_cloudwatch_log_group.minecraft]
@@ -145,4 +154,22 @@ resource "aws_lambda_permission" "minecraft_gateway" {
   function_name = aws_lambda_function.minecraft_proxy.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.minecraft.execution_arn}/*/*/minecraft/*"
+}
+
+resource "aws_cloudwatch_event_rule" "minecraft_idle" {
+  name                = "portfolio-minecraft-idle"
+  description         = "Dispatch Terraform cleanup after the instance's confirmed graceful idle stop"
+  schedule_expression = "rate(1 minute)"
+}
+resource "aws_cloudwatch_event_target" "minecraft_idle" {
+  rule      = aws_cloudwatch_event_rule.minecraft_idle.name
+  target_id = "minecraft-idle-check"
+  arn       = aws_lambda_function.minecraft_proxy.arn
+}
+resource "aws_lambda_permission" "minecraft_idle" {
+  statement_id  = "AllowMinecraftIdleSchedule"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.minecraft_proxy.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.minecraft_idle.arn
 }

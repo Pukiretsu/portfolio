@@ -115,6 +115,27 @@ def ensure_offline():
         raise RuntimeError("A Minecraft instance already exists. Use the confirmed destroy workflow before launching again; this prevents AMI updates replacing a live world.")
 
 
+def verify_auto_shutdown():
+    expected = os.environ.get("INPUT_EXPECTED_INSTANCE_ID", "")
+    if not expected or outputs().get("instance_id") != expected:
+        raise RuntimeError("Automatic cleanup no longer matches the instance in Terraform state")
+    item = aws("dynamodb", "get-item", "--table-name", TABLE, "--key", json.dumps({"pk": {"S": "activity#" + expected}}), "--consistent-read").get("Item", {})
+    activity = {key: int(value["N"]) for key, value in item.items() if "N" in value}
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend" / "minecraft_proxy"))
+    from activity import deadline, healthy
+    end = deadline(activity)
+    now = int(time.time())
+    if not healthy(activity, now) or not activity.get("shutdown_requested") or not end or now < end:
+        raise RuntimeError("Fresh idle deadline and graceful-stop acknowledgement are required for automatic cleanup")
+    from protocol import ping
+    server = outputs()
+    try:
+        ping(server["ipv4_address"], server["connection_address"])
+    except (OSError, ValueError):
+        return
+    raise RuntimeError("Minecraft is responding again; refusing automatic world deletion")
+
+
 def verify_destroy():
     values = json.loads(Path(os.environ["INVENTORY_FILE"]).read_text())
     state = subprocess.run(["terraform", "state", "list"], capture_output=True, text=True, check=True)
@@ -137,13 +158,13 @@ def verify_destroy():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["begin", "finish", "verify-deploy", "snapshot", "verify-destroy", "ensure-offline"])
+    parser.add_argument("command", choices=["begin", "finish", "verify-deploy", "snapshot", "verify-destroy", "ensure-offline", "verify-auto-shutdown"])
     parser.add_argument("--action", choices=["deploy", "destroy"])
     args = parser.parse_args()
     if args.command in ("begin", "finish") and not args.action:
         parser.error("--action is required")
     try:
-        {"begin": lambda: begin(args.action), "finish": lambda: finish(args.action), "verify-deploy": verify_deploy, "snapshot": snapshot, "verify-destroy": verify_destroy, "ensure-offline": ensure_offline}[args.command]()
+        {"begin": lambda: begin(args.action), "finish": lambda: finish(args.action), "verify-deploy": verify_deploy, "snapshot": snapshot, "verify-destroy": verify_destroy, "ensure-offline": ensure_offline, "verify-auto-shutdown": verify_auto_shutdown}[args.command]()
     except Exception as error:
         print("Minecraft workflow check failed: " + str(error), file=sys.stderr)
         sys.exit(1)

@@ -30,7 +30,8 @@ jobs:
       TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       TF_VAR_accept_eula: ${{ vars.MINECRAFT_ACCEPT_EULA || 'false' }}
       TF_VAR_minecraft_version: ${{ vars.MINECRAFT_VERSION || '1.21.11' }}
-      TF_VAR_whitelist: ${{ vars.MINECRAFT_WHITELIST || '[]' }}
+      TF_VAR_fabric_loader_version: ${{ vars.FABRIC_LOADER_VERSION || '0.18.4' }}
+      TF_VAR_fabric_installer_version: ${{ vars.FABRIC_INSTALLER_VERSION || '1.1.1' }}
       AWS_PAGER: ''
     steps:
       - uses: actions/checkout@v6

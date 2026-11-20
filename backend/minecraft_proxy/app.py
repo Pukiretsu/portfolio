@@ -11,6 +11,7 @@ import urllib.request
 import uuid
 
 from protocol import ping
+from activity import deadline, healthy, idle_view
 
 
 class ApiError(Exception):
@@ -26,9 +27,9 @@ def client(service):
     return boto3.client(service, config=Config(connect_timeout=2, read_timeout=3, retries={"max_attempts": 1}))
 
 
-def record():
+def record(key="server"):
     item = client("dynamodb").get_item(
-        TableName=os.environ["TABLE_NAME"], Key={"pk": {"S": "server"}}, ConsistentRead=True,
+        TableName=os.environ["TABLE_NAME"], Key={"pk": {"S": key}}, ConsistentRead=True,
     ).get("Item", {})
     return {key: int(value["N"]) if "N" in value else value.get("S", "") for key, value in item.items()}
 
@@ -47,6 +48,7 @@ def status():
     busy = state.get("lease_until", 0) > int(time.time())
     phase = "offline"
     telemetry = None
+    idle = None
     message = state.get("error", "")
     if busy:
         phase = "destroying" if state.get("phase") == "destroying" else "provisioning"
@@ -54,7 +56,12 @@ def status():
         phase = "error"
     if servers:
         server = servers[0]
-        if phase != "destroying":
+        if server.get("InstanceId"):
+            idle = idle_view(record("activity#" + server["InstanceId"]), int(time.time()))
+            if idle["shutdownRequested"]:
+                phase = "error" if state.get("phase") == "error" or not idle["monitoringHealthy"] else "destroying"
+                message = message or "Idle deadline reached. Minecraft stopped gracefully; Terraform cleanup is pending."
+        if phase != "destroying" and not (idle and idle["shutdownRequested"]):
             phase = "provisioning"
             ip = server.get("PublicIpAddress", "")
             if server["State"]["Name"] == "running" and ip and ipaddress.ip_address(ip).is_global:
@@ -73,6 +80,7 @@ def status():
         "phase": phase, "busy": busy, "resourcesExist": bool(servers),
         "address": os.environ["SERVER_ADDRESS"], "port": 25565,
         "telemetry": telemetry, "message": message,
+        "idle": idle,
         "workflowUrl": state.get("workflow_url", ""),
         "acceptEula": os.environ.get("ACCEPT_EULA") == "true",
         "updatedAt": int(time.time()),
@@ -92,7 +100,7 @@ def fail_operation(operation_id, message, release):
     )
 
 
-def dispatch(action, body):
+def dispatch(action, body, *, automatic_instance_id=None):
     if action == "destroy" and body.get("confirmDestroy") is not True:
         raise ApiError(400, "Confirm that destroying the server permanently deletes its world and disk.")
     if action == "deploy":
@@ -123,6 +131,9 @@ def dispatch(action, body):
     inputs = {"operation_id": operation_id}
     if action == "destroy":
         inputs["confirm_destroy"] = "true"
+        if automatic_instance_id:
+            inputs["automatic"] = "true"
+            inputs["expected_instance_id"] = automatic_instance_id
     request = urllib.request.Request(
         f"https://api.github.com/repos/{os.environ['GITHUB_REPO']}/actions/workflows/minecraft-{action}.yml/dispatches",
         data=json.dumps({"ref": "main", "inputs": inputs}).encode(), method="POST",
@@ -142,8 +153,27 @@ def dispatch(action, body):
     return {"operationId": operation_id, "phase": "provisioning" if action == "deploy" else "destroying"}
 
 
+def idle_check():
+    now = int(time.time())
+    if record().get("lease_until", 0) > now:
+        return {"skipped": "operation_in_progress"}
+    for server in instances():
+        if server["State"]["Name"] != "running":
+            continue
+        identity = server["InstanceId"]
+        activity = record("activity#" + identity)
+        end = deadline(activity)
+        # Only the matching instance's fresh, graceful-stop acknowledgement permits deletion.
+        if healthy(activity, now) and activity.get("shutdown_requested") and end and now >= end:
+            return dispatch("destroy", {"confirmDestroy": True}, automatic_instance_id=identity)
+    return {"skipped": "no_confirmed_idle_shutdown"}
+
+
 def handler(event, context):
     try:
+        rule = os.environ.get("IDLE_RULE_ARN")
+        if rule and event.get("source") == "aws.events" and event.get("detail-type") == "Scheduled Event" and event.get("resources") == [rule]:
+            return {"statusCode": 200, "body": json.dumps(idle_check())}
         # API Gateway verifies signature, issuer, client ID, expiry and scope first.
         # No Function URL is exposed, and the invoke permission is restricted to this API.
         claims = event.get("requestContext", {}).get("authorizer", {}).get("jwt", {}).get("claims", {})

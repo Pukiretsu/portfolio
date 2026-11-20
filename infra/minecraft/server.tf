@@ -11,9 +11,15 @@ resource "aws_instance" "server" {
   ipv6_address_count          = 1
   user_data_replace_on_change = true
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {
-    version   = var.minecraft_version
-    whitelist = jsonencode(var.whitelist)
+    version                  = var.minecraft_version
+    fabric_loader_version    = var.fabric_loader_version
+    fabric_installer_version = var.fabric_installer_version
+    monitor_py               = file("${path.module}/../../backend/minecraft_proxy/activity_monitor.py")
+    activity_py              = file("${path.module}/../../backend/minecraft_proxy/activity.py")
+    protocol_py              = file("${path.module}/../../backend/minecraft_proxy/protocol.py")
+    aws_region               = var.aws_region
   })
+  iam_instance_profile = aws_iam_instance_profile.activity.name
   metadata_options {
     http_tokens                 = "required"
     http_put_response_hop_limit = 1
@@ -36,5 +42,5 @@ resource "aws_instance" "server" {
       error_message = "Accept the Minecraft EULA before launching: set MINECRAFT_ACCEPT_EULA=true in repository variables."
     }
   }
-  depends_on = [aws_route.ipv4, aws_route.ipv6, aws_route_table_association.server]
+  depends_on = [aws_route.ipv4, aws_route.ipv6, aws_route_table_association.server, aws_iam_role_policy.activity]
 }

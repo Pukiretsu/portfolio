@@ -103,7 +103,7 @@ Both Terraform roots use the **same existing bucket**, `458302836200-terraform-s
 2. Create a fine-grained GitHub token limited to **Pukiretsu/portfolio**, with **Actions: Read and write** and the repository metadata access GitHub supplies. Save it as Actions repository secret **`MINECRAFT_GH_TOKEN`**. Avoid a broad classic PAT; set an expiry and rotate it when needed.
 3. Keep the existing `CLOUDFLARE_API_TOKEN` secret and `AWS_ROLE_ARN`, `AWS_REGION`, `DOMAIN_NAME`, and `CLOUDFLARE_ZONE_ID` variables. The Cloudflare token needs DNS Edit for this zone. No extra state bucket is needed.
 4. Read and accept the Minecraft EULA at https://aka.ms/MinecraftEULA, then set repository variable **`MINECRAFT_ACCEPT_EULA`** to **`true`**. This setting is intentionally false by default. The deploy workflow and API both enforce it.
-5. Optional variables: **`MINECRAFT_VERSION`** (default `1.21.11`, Java Edition) and **`MINECRAFT_WHITELIST`** (a JSON array of Java player names, such as `["PlayerName"]`). An empty whitelist permits any Microsoft-authenticated Java player to join the public game port.
+5. Optional variables: **`MINECRAFT_VERSION`** (default `1.21.11`, Java Edition), **`FABRIC_LOADER_VERSION`** (default `0.18.4`), and **`FABRIC_INSTALLER_VERSION`** (default `1.1.1`). Whitelist configuration has been removed. The server uses `online-mode=false`, `enforce-secure-profile=false`, `white-list=false`, and `enforce-whitelist=false`; player names are not verified with Microsoft/Mojang and can be impersonated.
 6. Push the implementation and run **Terraform infrastructure** on `main`. It creates the control plane and copies `MINECRAFT_GH_TOKEN` securely into **`portfolio/minecraft/github-token`** in AWS Secrets Manager. The secret value is a **plain token string**, not a JSON object, and is never a Terraform input or state value. Re-run this workflow after changing the token or EULA setting. Then deploy the frontend.
 
 If storing the token manually, create the Terraform-managed container first, then use Secrets Manager's plaintext value editor for `portfolio/minecraft/github-token`. Do not pre-create a conflicting secret outside Terraform without importing it. The frontend receives only the public API URL via `auth-config.json`.
@@ -112,7 +112,7 @@ If storing the token manually, create the Terraform-managed container first, the
 
 Sign in, open **Tools → Minecraft**, and select **Launch Server**. The proxy accepts only the fixed deploy/destroy workflow names on `main`, acquires a conditional operation lease, and dispatches server-side with the stored credential. Duplicate or overlapping requests return a conflict. Both workflows share a GitHub concurrency group in addition to Terraform's state lock. The status endpoint probes only the tagged EC2 address, never a caller-supplied hostname or port.
 
-Launch creates a `t4g.medium` ARM instance and encrypted 30 GiB gp3 root/world disk. Amazon Linux installs Java 21; bootstrap downloads the pinned vanilla server from Mojang and checks its published checksum. Minecraft runs as a non-root systemd service. No SSH, RCON, client AWS credentials, or unauthenticated API is exposed. Port 25565 is public on IPv4 and IPv6. The default server memory is 2 GiB and player limit is 10. Edit `infra/minecraft/user-data.sh.tftpl` if needed.
+Launch creates a `t4g.medium` ARM instance and encrypted 30 GiB gp3 root/world disk. Amazon Linux installs Java 21; bootstrap verifies the Mojang server checksum and downloads the pinned official Fabric launcher. Fabric runs as a non-root systemd service. No mods are bundled by default; Fabric API is a separate mod if your later mod selection requires it. No SSH, RCON, client AWS credentials, or unauthenticated API is exposed. Port 25565 is public on IPv4 and IPv6. The default server memory is 2 GiB and player limit is 10. Edit `infra/minecraft/user-data.sh.tftpl` if needed.
 
 Connect to **`mc.angelgp.dev`** (or `mc.<DOMAIN_NAME>`) using the configured Minecraft Java version. Cloudflare proxying is disabled; CloudFront never carries the raw game connection. The public IPv4 also lets a non-VPC Lambda probe the game without a permanently billed NAT gateway. Probe latency is measured from Lambda, not from your own computer.
 
@@ -122,7 +122,7 @@ Provisioning includes Java installation and world generation, so expect several 
 
 If a dispatch times out ambiguously, the safety lease remains for up to one hour to prevent duplicate launches. Check GitHub Actions first; do not clear a lease while a workflow is still running. A workflow normally releases its lease on success/failure/cancellation. A queued run that never starts may require waiting for lease expiry.
 
-No server launches automatically on push. Compute, EBS, and public IPv4 charges continue until teardown; there is no idle auto-shutdown. The lightweight control plane and Secrets Manager container persist while the game server is offline and have their own normal AWS charges.
+No server launches automatically on push. Compute, EBS, and public IPv4 charges continue until Terraform teardown. The idle shutdown policy below requests that teardown automatically. The lightweight control plane and Secrets Manager container persist while the game server is offline and have their own normal AWS charges.
 
 ### Verification
 
@@ -137,3 +137,19 @@ npm --prefix frontend run build
 ```
 
 These checks do not launch a game server. Full deploy/destroy testing requires the new IAM permissions, token, and explicit EULA acceptance.
+
+### Fabric idle shutdown and Terraform-managed deletion
+
+New launches use Fabric in offline account-verification mode with no whitelist. Changing bootstrap does not replace an existing server automatically; the normal launch guard still refuses to replace a live world.
+
+An instance-local activity monitor reads genuine join/leave log events and polls the local Minecraft status every 10 seconds, so a brief join between polls still counts. Its state is persisted on the server and sent to a per-instance DynamoDB item via an EC2 role limited to writing activity items. Old items expire automatically. The dashboard displays the server-time-based countdown, monitoring health, and an alert during the final minute.
+
+- Before anyone has joined, the deadline is **30 empty minutes from the first successful ready check**.
+- After any player has joined, the deadline is **10 continuous empty minutes**. Joining pauses the timer; the last player leaving starts a fresh 10-minute countdown.
+- If a status probe fails, the monitor does not assume the server is empty. Missing or stale heartbeats block automatic cleanup.
+
+At the deadline the monitor stops **only the Minecraft systemd process**, allowing Java to save cleanly. It does not stop or terminate EC2 and does not delete EBS or DNS. A one-minute EventBridge rule then invokes the control Lambda, which accepts only a fresh graceful-stop acknowledgement from the matching live instance and dispatches **`minecraft-destroy.yml`**. The workflow checks the instance against Terraform state and refuses automatic cleanup if Minecraft is responding again, then uses **`terraform destroy`** for every AWS and DNS resource. The same S3 bucket and `minecraft/terraform.tfstate` key remain authoritative. Resource teardown can take longer than the countdown due to schedule/runner availability.
+
+The policy runs even with no dashboard open. Automatic teardown permanently deletes the world disk, just like manual destroy. If dispatch or Terraform cleanup fails, the stopped game instance may still incur EC2/EBS charges; inspect the linked workflow and use the normal destroy workflow to recover.
+
+The bootstrap role/profile permissions and EventBridge rule permissions are included in the updated inline deployment policy at `docs/minecraft-deployment-policy.json` (the existing separate website policy remains required). The instance gets no permission to delete AWS resources or read the GitHub token. The runtime Lambda still only dispatches the Terraform workflow; it never calls EC2 termination APIs.
