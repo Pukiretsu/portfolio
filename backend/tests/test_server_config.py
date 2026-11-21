@@ -17,6 +17,15 @@ KEY = 'backups/550e8400-e29b-41d4-a716-446655440000.zip'
 OP = '550e8400-e29b-41d4-a716-446655440001'
 
 class ConfigurationTests(unittest.TestCase):
+    def test_missing_settings_returns_an_independent_default(self):
+        s3 = MagicMock(); error = RuntimeError('missing')
+        error.response = {'Error': {'Code': 'NoSuchKey'}}
+        s3.get_object.side_effect = error
+        value = settings.read(s3, 'private')
+        self.assertEqual(value, DEFAULT)
+        value['mods']['lithium'] = False
+        self.assertTrue(DEFAULT['mods']['lithium'])
+
     def test_defaults_and_mod_files_validate(self):
         self.assertEqual(validate(DEFAULT), DEFAULT)
         value = copy.deepcopy(DEFAULT); value['modFiles'] = {'lithium.properties': 'mixin.ai=true\n', 'example.json': '{}'}
