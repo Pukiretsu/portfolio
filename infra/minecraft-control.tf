@@ -57,7 +57,7 @@ resource "aws_iam_role_policy" "minecraft_proxy" {
         Effect = "Allow", Action = "ec2:DescribeInstances", Resource = "*"
       },
       {
-        Effect    = "Allow", Action = "s3:ListBucket", Resource = aws_s3_bucket.minecraft_backups.arn
+        Effect = "Allow", Action = "s3:ListBucket", Resource = aws_s3_bucket.minecraft_backups.arn
         # S3 needs ListBucket to return NoSuchKey for a first-run settings read.
         # The catalog endpoint itself always supplies the backups/ prefix.
       },
