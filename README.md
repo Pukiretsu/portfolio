@@ -163,3 +163,5 @@ Java uses a fixed 2800M heap with G1, view distance 8, simulation distance 6, an
 ### Map backups and SSH access
 
 See [Map download, restore, and private SSH access](docs/minecraft-world.md). Use `python3 scripts/minecraft-world.py download` to save only the world ZIP locally, and `upload <backup.zip> --confirm-restore` to restore it. SSH/SCP uses Systems Manager without exposing port 22.
+
+The Minecraft **World vault** also saves and restores maps directly from `/tools/minecraft`. Private S3 backups survive server destruction; no Drive account or additional secrets are required. See [backup storage, limits, and deployment order](docs/minecraft-world.md#backups-from-the-minecraft-tool-page).

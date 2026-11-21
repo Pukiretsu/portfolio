@@ -106,6 +106,7 @@ def backup(token):
         destination.unlink(missing_ok=True)
         raise
     print(destination, flush=True)
+    return destination
 
 
 def restore(filename, token):

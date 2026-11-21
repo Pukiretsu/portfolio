@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import WorkspaceLayout from '../components/WorkspaceLayout.vue'
+import MinecraftBackups from '../components/MinecraftBackups.vue'
 import { minecraftRequest } from '../api/minecraft'
 
 const state = ref(null)
@@ -17,7 +18,7 @@ let stopped = false
 let pollController
 let actionController
 const phase = computed(() => state.value?.phase || 'checking')
-const labels = { checking: 'Checking status', offline: 'Offline', provisioning: 'Provisioning', online: 'Online', destroying: 'Destroying', error: 'Needs attention' }
+const labels = { checking: 'Checking status', offline: 'Offline', provisioning: 'Provisioning', online: 'Online', destroying: 'Destroying', backing_up: 'Saving backup', restoring: 'Restoring world', error: 'Needs attention' }
 const busy = computed(() => requesting.value || state.value?.busy)
 const canLaunch = computed(() => state.value && !busy.value && !state.value.resourcesExist && state.value.acceptEula)
 const canDestroy = computed(() => state.value && !busy.value && (state.value.resourcesExist || phase.value === 'error'))
@@ -97,14 +98,15 @@ onUnmounted(() => { stopped = true; clearTimeout(timer); clearInterval(clockTime
           <p v-if="state?.telemetry?.motd" class="mt-6 text-sm text-soft">{{ state.telemetry.motd }}</p>
           <section v-if="state?.resourcesExist" class="mt-7 rounded-lg border border-line bg-base p-5" aria-labelledby="idle-title">
             <h3 id="idle-title" class="text-sm font-medium">Automatic Terraform cleanup</h3>
-            <template v-if="state?.idle?.shutdownRequested"><p role="status" class="mt-3 text-sm text-amber-200">Minecraft has stopped gracefully. The Terraform destroy workflow is being requested.</p></template>
+            <template v-if="['backing_up', 'restoring'].includes(phase)"><p role="status" class="mt-3 text-sm text-accent">Map maintenance in progress. Idle cleanup pauses while the world is being transferred.</p></template>
+            <template v-else-if="state?.idle?.shutdownRequested"><p role="status" class="mt-3 text-sm text-amber-200">Minecraft has stopped gracefully. The Terraform destroy workflow is being requested.</p></template>
             <template v-else-if="state?.idle?.monitoringHealthy">
               <p v-if="remaining !== null" class="mt-4 font-mono text-3xl tabular-nums" :class="remaining <= 60 ? 'text-red-200' : 'text-accent'" aria-label="Time until automatic deletion">{{ countdown }}</p>
               <p class="mt-3 text-xs leading-6 text-muted">{{ remaining === null ? 'Players are connected. The idle countdown is paused.' : state.idle.hasPlayed ? 'The server is empty. It will be deleted after 10 empty minutes.' : 'Nobody has joined yet. It will be deleted after 30 empty minutes.' }}</p>
               <p v-if="remaining !== null && remaining <= 60" role="alert" class="mt-3 text-sm text-red-200">Deletion is imminent. Join now to keep the world active.</p>
             </template>
             <p v-else class="mt-3 text-xs leading-6 text-amber-200">Waiting for a fresh activity heartbeat. Automatic deletion is blocked while monitoring is unavailable.</p>
-            <p class="mt-3 text-xs leading-6 text-muted">Runs even when this page is closed. Automatic deletion removes the world disk permanently.</p>
+            <p class="mt-3 text-xs leading-6 text-muted">Runs even when this page is closed. Automatic deletion removes the world disk permanently. Save a backup to keep your map.</p>
           </section>
           <p class="mt-8 text-xs leading-6 text-muted">{{ lastChecked ? `Last checked ${lastChecked}. Refreshes every 10 seconds.` : 'Checking the server through the secure control API…' }}</p>
         </section>
@@ -113,10 +115,11 @@ onUnmounted(() => { stopped = true; clearTimeout(timer); clearInterval(clockTime
           <button class="primary-button mt-7 w-full disabled:cursor-not-allowed disabled:opacity-40" :disabled="!canLaunch" @click="act('deploy')">{{ requesting ? 'Sending request…' : 'Launch Server' }}</button>
           <p v-if="state && !state.acceptEula" class="mt-4 text-xs leading-6 text-muted">Owner setup required: accept the <a class="underline" href="https://aka.ms/MinecraftEULA" target="_blank" rel="noopener noreferrer">Minecraft EULA</a>, set MINECRAFT_ACCEPT_EULA=true, and run infrastructure deployment.</p>
           <p class="mt-5 text-xs leading-6 text-muted">Provisioning and first startup can take several minutes. Compute, disk, and public IPv4 charges apply while deployed.</p>
-          <div class="mt-7 border-t border-line pt-6"><p class="text-sm font-medium text-red-200">Destructive shutdown</p><p class="mt-3 text-xs leading-6 text-muted">Destroy permanently deletes this server and its world disk. A later launch starts a fresh world.</p><label class="mt-4 flex items-start gap-3 text-xs leading-6 text-soft"><input v-model="confirmDestroy" type="checkbox" class="mt-1 h-4 w-4 shrink-0 accent-red-300" :disabled="busy" />I understand the server and world data will be deleted.</label><button class="mt-5 w-full rounded border border-red-300/50 px-4 py-3 text-sm text-red-200 transition hover:bg-red-300/10 disabled:cursor-not-allowed disabled:opacity-40" :disabled="!canDestroy || !confirmDestroy" @click="act('destroy')">Stop / Destroy Server</button></div>
+          <div class="mt-7 border-t border-line pt-6"><p class="text-sm font-medium text-red-200">Destructive shutdown</p><p class="mt-3 text-xs leading-6 text-muted">Destroy permanently deletes this server and its world disk. A later launch starts a fresh world. Saved S3 backups are kept and can be restored.</p><label class="mt-4 flex items-start gap-3 text-xs leading-6 text-soft"><input v-model="confirmDestroy" type="checkbox" class="mt-1 h-4 w-4 shrink-0 accent-red-300" :disabled="busy" />I understand the server and world data will be deleted.</label><button class="mt-5 w-full rounded border border-red-300/50 px-4 py-3 text-sm text-red-200 transition hover:bg-red-300/10 disabled:cursor-not-allowed disabled:opacity-40" :disabled="!canDestroy || !confirmDestroy" @click="act('destroy')">Stop / Destroy Server</button></div>
           <a v-if="workflowUrl" :href="workflowUrl" target="_blank" rel="noopener noreferrer" class="text-link mt-6 inline-block">View active workflow ↗</a>
         </section>
       </div>
+      <MinecraftBackups :state="state" @operation="result => { state = { ...state, phase: result.phase, busy: true } }" />
     </section>
   </WorkspaceLayout>
 </template>

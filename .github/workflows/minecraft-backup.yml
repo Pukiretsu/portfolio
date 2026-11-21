@@ -1,0 +1,60 @@
+name: Minecraft map backup or restore
+on:
+  workflow_dispatch:
+    inputs:
+      operation_id:
+        description: Launcher operation ID (optional for manual runs)
+        required: false
+        type: string
+      action:
+        description: Map operation
+        required: true
+        type: choice
+        options: [backup, restore]
+      object_key:
+        description: Private S3 archive key supplied by the dashboard
+        required: true
+        type: string
+      expected_instance_id:
+        description: Instance selected by the dashboard
+        required: true
+        type: string
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: portfolio-minecraft
+  cancel-in-progress: false
+jobs:
+  transfer:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      AWS_PAGER: ''
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      INPUT_OPERATION_ID: ${{ inputs.operation_id }}
+      MAP_ACTION: ${{ inputs.action }}
+      MAP_OBJECT_KEY: ${{ inputs.object_key }}
+      MAP_INSTANCE_ID: ${{ inputs.expected_instance_id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Authenticate with short-lived OIDC credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: minecraft-map-${{ github.run_id }}
+          role-duration-seconds: 3600
+          unset-current-credentials: true
+      - name: Claim the shared server operation lock
+        run: python3 .github/scripts/minecraft-control.py begin --action "$MAP_ACTION"
+      - name: Transfer only the world using Systems Manager and private S3
+        run: python3 .github/scripts/minecraft-map.py
+      - name: Publish operation result
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: python3 .github/scripts/minecraft-control.py finish --action "$MAP_ACTION"

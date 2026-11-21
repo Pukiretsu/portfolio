@@ -1,3 +1,5 @@
+data "aws_caller_identity" "current" {}
+
 data "aws_dynamodb_table" "control" {
   name = "portfolio-minecraft-control"
 }
@@ -26,6 +28,15 @@ resource "aws_iam_role_policy" "activity" {
         "ec2messages:GetMessages", "ec2messages:SendReply"
       ]
       Resource = "*"
+      }, {
+      Effect = "Allow", Action = ["s3:GetObject"]
+      Resource = [
+        "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-portfolio-minecraft-backups/backups/*",
+        "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-portfolio-minecraft-backups/uploads/*"
+      ]
+      }, {
+      Effect   = "Allow", Action = ["s3:PutObject", "s3:AbortMultipartUpload"]
+      Resource = "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-portfolio-minecraft-backups/backups/*"
       }, {
       Effect    = "Allow", Action = "dynamodb:UpdateItem", Resource = data.aws_dynamodb_table.control.arn
       Condition = { "ForAllValues:StringLike" = { "dynamodb:LeadingKeys" = ["activity#*"] } }

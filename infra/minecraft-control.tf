@@ -55,6 +55,17 @@ resource "aws_iam_role_policy" "minecraft_proxy" {
       },
       {
         Effect = "Allow", Action = "ec2:DescribeInstances", Resource = "*"
+      },
+      {
+        Effect    = "Allow", Action = "s3:ListBucket", Resource = aws_s3_bucket.minecraft_backups.arn
+        Condition = { StringLike = { "s3:prefix" = ["backups/", "backups/*"] } }
+      },
+      {
+        Effect   = "Allow", Action = "s3:GetObject"
+        Resource = ["${aws_s3_bucket.minecraft_backups.arn}/backups/*", "${aws_s3_bucket.minecraft_backups.arn}/uploads/*"]
+      },
+      {
+        Effect = "Allow", Action = "s3:PutObject", Resource = "${aws_s3_bucket.minecraft_backups.arn}/uploads/*"
       }
     ]
   })
@@ -70,6 +81,10 @@ data "archive_file" "minecraft_proxy" {
   source {
     content  = file("${path.module}/../backend/minecraft_proxy/protocol.py")
     filename = "protocol.py"
+  }
+  source {
+    content  = file("${path.module}/../backend/minecraft_proxy/backups.py")
+    filename = "backups.py"
   }
   source {
     content  = file("${path.module}/../backend/minecraft_proxy/activity.py")
@@ -90,6 +105,7 @@ resource "aws_lambda_function" "minecraft_proxy" {
   reserved_concurrent_executions = -1
   environment {
     variables = {
+      BACKUP_BUCKET  = aws_s3_bucket.minecraft_backups.id
       TABLE_NAME     = aws_dynamodb_table.minecraft.name
       GITHUB_SECRET  = aws_secretsmanager_secret.minecraft_github.arn
       GITHUB_REPO    = "Pukiretsu/portfolio"
@@ -130,7 +146,7 @@ resource "aws_apigatewayv2_integration" "minecraft" {
   timeout_milliseconds   = 25000
 }
 resource "aws_apigatewayv2_route" "minecraft" {
-  for_each           = toset(["GET /minecraft/status", "POST /minecraft/deploy", "POST /minecraft/destroy"])
+  for_each           = toset(["GET /minecraft/status", "POST /minecraft/deploy", "POST /minecraft/destroy", "GET /minecraft/backups", "POST /minecraft/backups/upload", "POST /minecraft/backups/download", "POST /minecraft/backup", "POST /minecraft/restore"])
   api_id             = aws_apigatewayv2_api.minecraft.id
   route_key          = each.value
   target             = "integrations/${aws_apigatewayv2_integration.minecraft.id}"

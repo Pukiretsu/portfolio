@@ -34,7 +34,7 @@ def begin(action):
         "--update-expression", "SET operation_id=:id, #phase=:phase, lease_until=:lease, updated_at=:now, workflow_url=:url, #error=:empty",
         "--condition-expression", "attribute_not_exists(lease_until) OR lease_until < :now OR operation_id=:id",
         "--expression-attribute-names", '{"#phase":"phase","#error":"error"}',
-        "--expression-attribute-values", json.dumps({":id": {"S": operation}, ":phase": {"S": "provisioning" if action == "deploy" else "destroying"}, ":lease": {"N": str(now + 3600)}, ":now": {"N": str(now)}, ":url": {"S": run_url}, ":empty": {"S": ""}}))
+        "--expression-attribute-values", json.dumps({":id": {"S": operation}, ":phase": {"S": {"deploy": "provisioning", "destroy": "destroying", "backup": "backing_up", "restore": "restoring"}[action]}, ":lease": {"N": str(now + 3600)}, ":now": {"N": str(now)}, ":url": {"S": run_url}, ":empty": {"S": ""}}))
     with open(os.environ["GITHUB_ENV"], "a") as output:
         output.write("MINECRAFT_OPERATION_ID=" + operation + "\n")
     print("Minecraft operation claimed; other launcher requests are locked until completion.")
@@ -44,8 +44,20 @@ def finish(action):
     operation = os.environ.get("MINECRAFT_OPERATION_ID")
     if not operation:
         return
+    if action in ('backup', 'restore') and os.environ.get('MINECRAFT_MAP_COMMAND_SENT') and not os.environ.get('MINECRAFT_MAP_COMMAND_ID'):
+        print('SSM dispatch outcome is uncertain. Keeping the safety lease.')
+        return
+    if action in ('backup', 'restore') and os.environ.get('MINECRAFT_MAP_COMMAND_ID'):
+        try:
+            command = aws('ssm', 'get-command-invocation', '--command-id', os.environ['MINECRAFT_MAP_COMMAND_ID'], '--instance-id', os.environ['MAP_INSTANCE_ID'])
+            if command['Status'] in ('Pending', 'InProgress', 'Delayed', 'Cancelling'):
+                print('SSM map command is still active. Keeping the safety lease until it expires.')
+                return
+        except Exception:
+            print('Cannot confirm map command completion. Keeping the safety lease.')
+            return
     success = os.environ.get("JOB_STATUS") == "success"
-    phase = ("online" if action == "deploy" else "offline") if success else "error"
+    phase = ("offline" if action == "destroy" else "online") if success else "error"
     aws("dynamodb", "update-item", "--table-name", TABLE, "--key", '{"pk":{"S":"server"}}',
         "--update-expression", "SET #phase=:phase, lease_until=:zero, #error=:error, updated_at=:now",
         "--condition-expression", "operation_id=:id",
@@ -159,7 +171,7 @@ def verify_destroy():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=["begin", "finish", "verify-deploy", "snapshot", "verify-destroy", "ensure-offline", "verify-auto-shutdown"])
-    parser.add_argument("--action", choices=["deploy", "destroy"])
+    parser.add_argument("--action", choices=["deploy", "destroy", "backup", "restore"])
     args = parser.parse_args()
     if args.command in ("begin", "finish") and not args.action:
         parser.error("--action is required")
