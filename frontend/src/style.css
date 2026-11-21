@@ -96,3 +96,33 @@
 
 /* Keep the decorative orbit inside narrow screens without clipping page controls. */
 @media (max-width: 639px) { .hero-art { overflow: hidden; } }
+
+@layer components {
+  .document-title {
+    font-size: clamp(2.75rem, 6vw, 5rem);
+    font-weight: 500;
+    line-height: 1.07;
+    letter-spacing: -.06em;
+    overflow-wrap: anywhere;
+  }
+
+  .document-body {
+    max-width: 68ch;
+    margin-top: 1.5rem;
+    color: var(--color-soft);
+    line-height: 1.75;
+    overflow-wrap: anywhere;
+  }
+
+  .document-body > * + * { margin-top: 1rem; }
+  .document-body :is(h2, h3, h4, h5, h6) { margin-top: 2rem; color: var(--color-ink); }
+  .document-body h2 { font-size: 1.6rem; }
+  .document-body h3 { font-size: 1.25rem; }
+  .document-body a { color: var(--color-accent); text-decoration: underline; }
+  .document-body ul { list-style: disc; padding-inline-start: 1.5rem; }
+  .document-body ol { list-style: decimal; padding-inline-start: 1.5rem; }
+  .document-body blockquote { border-inline-start: 2px solid var(--color-line); padding-inline-start: 1rem; }
+  .document-body pre { overflow-x: auto; border: 1px solid var(--color-line); border-radius: .5rem; background: var(--color-panel); padding: 1rem; }
+  .document-body :not(pre) > code { color: var(--color-accent); }
+  .document-body th, .document-body td { border: 1px solid var(--color-line); padding: .35rem .65rem; }
+}

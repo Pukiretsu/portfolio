@@ -1,11 +1,8 @@
 <script setup>
 import { nextTick, ref } from 'vue'
 
-const profile = {
-  name: 'Angel',
-  linkedin: 'https://www.linkedin.com/in/angonzalezpa/',
-  github: 'https://github.com/Pukiretsu',
-}
+import { profile } from '../content/profile'
+
 const menuOpen = ref(false)
 const projects = [
   {
@@ -68,15 +65,15 @@ async function runCommand(value = terminalInput.value) {
       <div class="page-width flex items-center justify-between gap-6 py-5">
         <a href="#" class="wordmark" aria-label="Angel portfolio home">ag<span class="text-accent">.</span></a>
         <nav aria-label="Main navigation" class="hidden items-center gap-8 md:flex">
-          <a class="nav-link" href="#work">Projects</a><a class="nav-link" href="#stack">Stack</a><a class="nav-link" href="#about">About</a><RouterLink class="nav-link" to="/tools">Tools</RouterLink>
+          <RouterLink class="nav-link" to="/projects">Projects</RouterLink><a class="nav-link" href="#stack">Stack</a><RouterLink class="nav-link" to="/about">About</RouterLink><RouterLink class="nav-link" to="/tools">Tools</RouterLink>
         </nav>
         <a :href="profile.linkedin" class="header-github hidden items-center gap-3 md:inline-flex">LinkedIn <span aria-hidden="true">↗</span></a>
         <button class="menu-toggle md:hidden" :aria-expanded="menuOpen" aria-controls="mobile-nav" @click="menuOpen = !menuOpen">{{ menuOpen ? 'Close' : 'Menu' }} <span aria-hidden="true">{{ menuOpen ? '−' : '+' }}</span></button>
       </div>
       <nav v-if="menuOpen" id="mobile-nav" aria-label="Mobile navigation" class="page-width flex flex-col gap-5 pb-6 md:hidden">
-        <a href="#work" @click="menuOpen = false">Projects</a>
+        <RouterLink to="/projects" @click="menuOpen = false">Projects</RouterLink>
         <a href="#stack" @click="menuOpen = false">Stack</a>
-        <a href="#about" @click="menuOpen = false">About</a>
+        <RouterLink to="/about" @click="menuOpen = false">About</RouterLink>
         <RouterLink to="/tools" @click="menuOpen = false">Tools</RouterLink>
         <a :href="profile.linkedin">LinkedIn</a>
         <a :href="profile.github">GitHub</a>
@@ -124,6 +121,7 @@ async function runCommand(value = terminalInput.value) {
               <ul aria-label="Technologies" class="mt-5 flex flex-wrap gap-2">
                 <li v-for="tag in project.tags" :key="tag" class="tag">{{ tag }}</li>
               </ul>
+              <RouterLink :to="{ name: 'project', params: { slug: project.id } }" class="text-link mt-5 inline-block">Read the write-up <span aria-hidden="true">→</span></RouterLink>
             </article>
           </div>
         </div>
@@ -146,6 +144,7 @@ async function runCommand(value = terminalInput.value) {
           <div>
             <h2 id="about-title">About me<span class="text-accent">.</span></h2>
             <p class="mt-6 max-w-lg leading-7 text-muted">I’m Angel, a developer interested in how data moves through a system, how to automate its deployment, and how to show people what the data says.</p>
+            <RouterLink to="/about" class="text-link mt-5 inline-block">More about me <span aria-hidden="true">→</span></RouterLink>
           </div>
           <div class="terminal">
             <div class="terminal-title flex items-center justify-between"><div class="window-dots"><i></i><i></i><i></i></div><span>meet-angel.sh</span><span aria-hidden="true">⌘</span></div>
