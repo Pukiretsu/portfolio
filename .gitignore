@@ -13,3 +13,6 @@ frontend/.env*
 !frontend/.env.example
 __pycache__/
 *.pyc
+# Local Minecraft transfer credentials, tools and world archives
+.local/
+minecraft-backups/

@@ -11,6 +11,7 @@ on:
       - '.github/scripts/invite-tools-user.py'
       - '.github/scripts/store-minecraft-token.py'
       - 'backend/**'
+      - 'scripts/minecraft-world*.py'
   push:
     branches: [main]
     paths:
@@ -21,6 +22,7 @@ on:
       - '.github/scripts/invite-tools-user.py'
       - '.github/scripts/store-minecraft-token.py'
       - 'backend/**'
+      - 'scripts/minecraft-world*.py'
   workflow_dispatch:
 
 permissions:
