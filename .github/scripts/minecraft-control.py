@@ -44,10 +44,10 @@ def finish(action):
     operation = os.environ.get("MINECRAFT_OPERATION_ID")
     if not operation:
         return
-    if action in ('backup', 'restore') and os.environ.get('MINECRAFT_MAP_COMMAND_SENT') and not os.environ.get('MINECRAFT_MAP_COMMAND_ID'):
+    if os.environ.get('MINECRAFT_MAP_COMMAND_SENT') and not os.environ.get('MINECRAFT_MAP_COMMAND_ID'):
         print('SSM dispatch outcome is uncertain. Keeping the safety lease.')
         return
-    if action in ('backup', 'restore') and os.environ.get('MINECRAFT_MAP_COMMAND_ID'):
+    if os.environ.get('MINECRAFT_MAP_COMMAND_ID'):
         try:
             command = aws('ssm', 'get-command-invocation', '--command-id', os.environ['MINECRAFT_MAP_COMMAND_ID'], '--instance-id', os.environ['MAP_INSTANCE_ID'])
             if command['Status'] in ('Pending', 'InProgress', 'Delayed', 'Cancelling'):

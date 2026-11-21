@@ -30,7 +30,7 @@ class InstallSafetyTests(unittest.TestCase):
         script = (repo / 'infra/minecraft/user-data.sh.tftpl').read_text()
         values = {'version': '26.3', 'fabric_loader_version': '0.19.5',
                   'fabric_installer_version': '1.1.1', 'fabric_api_version': '0.166.2+26.3',
-                  'aws_region': 'us-east-1'}
+                  'aws_region': 'us-east-1', 'backup_bucket': 'test-backups', 'launch_config_key': 'settings/server.json'}
         files = {'installer': 'infra/minecraft/install-server.py',
                  'monitor': 'backend/minecraft_proxy/activity_monitor.py',
                  'activity': 'backend/minecraft_proxy/activity.py',
@@ -40,6 +40,7 @@ class InstallSafetyTests(unittest.TestCase):
         for key, value in values.items():
             script = script.replace('${' + key + '}', value)
         self.assertNotIn('${', script)
+        self.assertLess(script.index('python3 /opt/minecraft-bootstrap/minecraft-bootstrap.py'), script.index('systemctl restart minecraft'))
         self.assertLessEqual(len(script.encode()), 16384)
         subprocess.run(['bash', '-n'], input=script, text=True, check=True)
 

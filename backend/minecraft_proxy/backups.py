@@ -1,7 +1,6 @@
 """Private map archive catalog and constrained, short-lived browser transfers."""
 import os
 import re
-import uuid
 
 MAX_UPLOAD = 1024 ** 3
 KEY = re.compile(r'^(backups|uploads)/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.zip$')
@@ -42,23 +41,6 @@ def catalog(s3, cursor=None):
              for item in response.get('Contents', []) if KEY.fullmatch(item['Key'])]
     return {'items': sorted(items, key=lambda item: item['createdAt'], reverse=True),
             'nextCursor': response.get('NextContinuationToken')}
-
-
-def upload(s3, body):
-    size = body.get('size')
-    if type(size) is not int or not 0 < size <= MAX_UPLOAD:
-        raise ValueError('Choose a ZIP up to 1 GiB')
-    filename = body.get('filename', '')
-    if not isinstance(filename, str) or not filename.lower().endswith('.zip') or len(filename) > 200:
-        raise ValueError('Choose a .zip map backup')
-    value = 'uploads/' + str(uuid.uuid4()) + '.zip'
-    form = s3.generate_presigned_post(
-        Bucket=bucket(), Key=value,
-        Fields={'Content-Type': 'application/zip'},
-        Conditions=[{'Content-Type': 'application/zip'}, ['content-length-range', 1, size]],
-        ExpiresIn=900,
-    )
-    return {'key': value, 'upload': form, 'expiresIn': 900}
 
 
 def download(s3, body):

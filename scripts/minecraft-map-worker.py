@@ -27,38 +27,22 @@ def main():
     signal.signal(signal.SIGINT, interrupted)
     action, key, bucket, token = sys.argv[1:]
     local = None
+    saved = False
+    if action not in ('backup', 'stop'):
+        raise RuntimeError('Worlds can only be restored from S3 during startup')
     try:
-        world.pause(token)
-        if action == 'backup':
-            # world.backup prints the path; it also returns it for non-SSH callers.
-            local = world.backup(token)
-            if local.stat().st_size > 1024 ** 3:
-                raise RuntimeError('Backup exceeds the dashboard limit of 1 GiB')
-            copy(str(local), 's3://' + bucket + '/' + key)
-            print('World safely stored in private S3.', flush=True)
-        elif action == 'restore':
-            world.TRANSFER.mkdir(mode=0o700, exist_ok=True)
-            local = world.TRANSFER / ('s3-import-' + token + '.zip')
-            copy('s3://' + bucket + '/' + key, str(local))
-            if local.stat().st_size > 1024 ** 3:
-                raise RuntimeError('Upload exceeds 1 GiB')
-            # Preserve the current map in S3 before replacing it, even for bad ZIPs.
-            previous = world.backup(token)
-            try:
-                import uuid
-                copy(str(previous), 's3://' + bucket + '/backups/' + str(uuid.uuid4()) + '.zip')
-            finally:
-                previous.unlink(missing_ok=True)
-            world.restore(str(local), token)
-            if key.startswith('uploads/'):
-                # A validated/restored upload becomes a durable, downloadable vault entry.
-                copy(str(local), 's3://' + bucket + '/backups/' + str(uuid.uuid4()) + '.zip')
-            print('World restored. The previous map is also saved in S3.', flush=True)
-        else:
-            raise RuntimeError('Unsupported operation')
+        world.pause(token, allow_shutdown=action == 'stop')
+        local = world.backup(token)
+        if local.stat().st_size > 1024 ** 3:
+            raise RuntimeError('Backup exceeds the dashboard limit of 1 GiB')
+        copy(str(local), 's3://' + bucket + '/' + key)
+        saved = True
+        print('World safely stored in private S3.', flush=True)
     finally:
         try:
-            world.resume(token)
+            # Stop snapshots remain quiescent until Terraform destroys the disk.
+            if action != 'stop' or not saved:
+                world.resume(token)
         finally:
             if local:
                 local.unlink(missing_ok=True)

@@ -1,146 +1,115 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { minecraftRequest } from '../api/minecraft'
-
 const props = defineProps({ state: Object })
 const emit = defineEmits(['operation'])
-const items = ref([])
-const cursor = ref(null)
-const loading = ref(false)
-const working = ref(false)
-const error = ref('')
-const notice = ref('')
-const selected = ref('')
-const file = ref(null)
-const uploadedKey = ref('')
-const progress = ref(0)
-const confirm = ref(false)
-const uploadInput = ref(null)
-let disposed = false
-let uploadRequest
+const items = ref([]), cursor = ref(null), selected = ref(''), activeKey = ref(null)
+const error = ref(''), notice = ref(''), working = ref(false), loading = ref(false)
+const file = ref(null), progress = ref(0), confirmed = ref(false)
+let xhr, disposed = false
 const controller = new AbortController()
-const busy = computed(() => working.value || props.state?.busy)
-const ready = computed(() => !busy.value && props.state?.phase === 'online' && !props.state?.idle?.shutdownRequested)
-const restoreKey = computed(() => file.value ? uploadedKey.value : selected.value)
-const phases = { backing_up: 'Saving your world to S3…', restoring: 'Restoring your saved world…' }
-const formatSize = value => `${(value / 1024 / 1024).toFixed(1)} MB`
-const date = value => new Date(value).toLocaleString()
-
+const offline = computed(() => props.state && !props.state.resourcesExist && !props.state.busy && !working.value)
+const online = computed(() => props.state?.phase === 'online' && !props.state.busy && !working.value)
+const size = value => `${(value / 1024 / 1024).toFixed(1)} MB`
 async function refresh(more = false) {
   if (loading.value) return
   loading.value = true
   try {
-    const path = 'backups' + (more && cursor.value ? `?cursor=${encodeURIComponent(cursor.value)}` : '')
-    const result = await minecraftRequest(path, { signal: controller.signal })
-    if (disposed) return
-    const combined = more ? [...items.value, ...result.items] : result.items
-    items.value = [...new Map(combined.map(item => [item.key, item])).values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    cursor.value = result.nextCursor
-    error.value = ''
+    const value = await minecraftRequest('backups' + (more && cursor.value ? `?cursor=${encodeURIComponent(cursor.value)}` : ''), { signal: controller.signal })
+    const entries = more ? [...items.value, ...value.items] : value.items
+    items.value = [...new Map(entries.map(item => [item.key, item])).values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    cursor.value = value.nextCursor
+    activeKey.value = (await minecraftRequest('config', { signal: controller.signal })).desired.worldKey
   } catch (problem) { if (!disposed) error.value = problem.message }
   finally { loading.value = false }
 }
-async function operation(action) {
-  if (!ready.value || (action === 'restore' && (!confirm.value || !restoreKey.value))) return
-  working.value = true
-  error.value = ''; notice.value = ''
-  try {
-    const result = await minecraftRequest(action, { method: 'POST', body: action === 'restore' ? { key: restoreKey.value, confirmRestore: true } : {}, signal: controller.signal })
-    if (disposed) return
-    emit('operation', result)
-    notice.value = action === 'backup' ? 'Backup queued. The archive will appear below when it is safely saved.' : 'Restore queued. Players will disconnect while the map is replaced.'
-    confirm.value = false
-    if (action === 'restore') { file.value = null; uploadedKey.value = ''; if (uploadInput.value) uploadInput.value.value = '' }
-  } catch (problem) { if (!disposed) error.value = problem.message }
+async function saveBackup() {
+  if (!online.value) return
+  working.value = true; error.value = ''
+  try { emit('operation', await minecraftRequest('backup', { method: 'POST', body: {}, signal: controller.signal })); notice.value = 'Saving the current map to S3. Minecraft will resume after the snapshot.' }
+  catch (problem) { error.value = problem.message }
   finally { working.value = false }
 }
 async function download(item) {
-  error.value = ''
-  try {
-    const result = await minecraftRequest('backups/download', { method: 'POST', body: { key: item.key }, signal: controller.signal })
-    if (disposed) return
-    // S3 returns Content-Disposition: attachment; no credentials enter the URL.
-    const link = document.createElement('a')
-    link.href = result.url; link.rel = 'noreferrer'; link.referrerPolicy = 'no-referrer'
-    link.click()
-  } catch (problem) { if (!disposed) error.value = problem.message }
+  try { const value = await minecraftRequest('backups/download', { method: 'POST', body: { key: item.key }, signal: controller.signal }); const link = document.createElement('a'); link.href = value.url; link.rel = 'noreferrer'; link.referrerPolicy = 'no-referrer'; link.click() }
+  catch (problem) { error.value = problem.message }
+}
+async function chooseWorld(key) {
+  if (!offline.value || (key && !confirmed.value)) return
+  working.value = true; error.value = ''
+  try { const value = await minecraftRequest('restore', { method: 'POST', body: { key }, signal: controller.signal }); activeKey.value = value.desired.worldKey; notice.value = key ? 'S3 world selected. Start restores it before Java starts.' : 'The next Start will generate a new world.'; confirmed.value = false }
+  catch (problem) { error.value = problem.message }
+  finally { working.value = false }
 }
 function chooseFile(event) {
-  file.value = event.target.files?.[0] || null
-  uploadedKey.value = ''; selected.value = ''; progress.value = 0; confirm.value = false; error.value = ''
-  if (file.value && (!file.value.name.toLowerCase().endsWith('.zip') || !file.value.size || file.value.size > 1024 ** 3)) {
-    error.value = 'Choose a nonempty .zip map backup up to 1 GiB.'; file.value = null
-  }
+  file.value = event.target.files?.[0] || null; progress.value = 0; error.value = ''
+  if (file.value && (!file.value.name.toLowerCase().endsWith('.zip') || !file.value.size || file.value.size > 1024 ** 3)) { file.value = null; error.value = 'Choose a nonempty .zip map up to 1 GiB.' }
 }
 async function upload() {
-  if (!file.value || busy.value) return
+  if (!offline.value || !file.value) return
   working.value = true; error.value = ''; notice.value = ''
+  let operation, completed = false
   try {
-    const result = await minecraftRequest('backups/upload', { method: 'POST', body: { filename: file.value.name, size: file.value.size }, signal: controller.signal })
-    const form = new FormData()
-    for (const [key, value] of Object.entries(result.upload.fields)) form.append(key, value)
-    form.append('file', file.value)
-    await new Promise((resolve, reject) => {
-      uploadRequest = new XMLHttpRequest()
-      uploadRequest.open('POST', result.upload.url)
-      uploadRequest.timeout = 15 * 60 * 1000
-      uploadRequest.upload.onprogress = event => { if (event.lengthComputable) progress.value = Math.round(event.loaded / event.total * 100) }
-      uploadRequest.onload = () => uploadRequest.status >= 200 && uploadRequest.status < 300 ? resolve() : reject(new Error('S3 upload failed. Try uploading again.'))
-      uploadRequest.onerror = () => reject(new Error('Upload interrupted. Check your connection and retry.'))
-      uploadRequest.ontimeout = () => reject(new Error('Upload timed out. Please retry.'))
-      uploadRequest.onabort = () => reject(new Error('Upload cancelled.'))
-      uploadRequest.send(form)
-    })
-    if (!disposed) { uploadedKey.value = result.key; notice.value = 'Upload complete. Confirm below to restore this map.' }
+    operation = await minecraftRequest('backups/upload', { method: 'POST', body: { filename: file.value.name, size: file.value.size }, signal: controller.signal })
+    emit('operation', { phase: 'uploading', busy: true })
+    const parts = []
+    for (const part of operation.parts) {
+      const start = (part.partNumber - 1) * operation.partSize
+      const blob = file.value.slice(start, start + operation.partSize)
+      const etag = await new Promise((resolve, reject) => {
+        xhr = new XMLHttpRequest(); xhr.open('PUT', part.url); xhr.timeout = 180000
+        xhr.upload.onprogress = event => { if (event.lengthComputable) progress.value = Math.round((start + event.loaded) / file.value.size * 100) }
+        xhr.onload = () => xhr.status >= 200 && xhr.status < 300 && xhr.getResponseHeader('ETag') ? resolve(xhr.getResponseHeader('ETag')) : reject(new Error('S3 rejected an upload part'))
+        xhr.onerror = xhr.ontimeout = () => reject(new Error('Upload interrupted; retry on a stable connection'))
+        xhr.onabort = () => reject(new Error('Upload cancelled'))
+        xhr.send(blob)
+      })
+      parts.push({ PartNumber: part.partNumber, ETag: etag })
+    }
+    const value = await minecraftRequest('backups/complete', { method: 'POST', body: { operationId: operation.operationId, parts }, signal: controller.signal })
+    completed = true; selected.value = value.key; file.value = null
+    notice.value = 'World uploaded to S3. Select it below for the next Start; nothing was sent to EC2.'
+    await refresh()
   } catch (problem) { if (!disposed) error.value = problem.message }
-  finally { working.value = false; uploadRequest = null }
+  finally {
+    xhr = null
+    if (operation && !completed) {
+      try { await minecraftRequest('backups/cancel', { method: 'POST', body: { operationId: operation.operationId } }) }
+      catch { if (!disposed) error.value += ' Upload lock will expire automatically; refresh status before starting.' }
+    }
+    working.value = false
+    if (operation) emit('operation', { phase: 'offline', busy: false })
+  }
 }
-watch(() => props.state?.busy, (value, previous) => { if (previous && !value) refresh() })
-onMounted(refresh)
-onUnmounted(() => { disposed = true; controller.abort(); uploadRequest?.abort() })
+watch(() => props.state?.busy, (value, before) => { if (before && !value) refresh() })
+onMounted(() => refresh())
+onUnmounted(() => { disposed = true; controller.abort(); xhr?.abort() })
 </script>
-
 <template>
-  <section class="mt-6 overflow-hidden rounded-xl border border-line bg-panel" aria-labelledby="map-vault-title">
-    <div class="border-b border-line p-6 md:p-8">
-      <p class="eyebrow mb-4">YOUR WORLD, KEPT SAFE</p>
-      <div class="flex flex-wrap items-start justify-between gap-5">
-        <div><h2 id="map-vault-title" class="!text-2xl !tracking-tight">World vault<span class="text-accent">.</span></h2><p class="mt-3 max-w-2xl text-sm leading-7 text-muted">Keep a copy before you log off. Private S3 backups survive server destruction and include the Overworld, Nether, End, and player data.</p></div>
-        <span class="rounded-full border border-line px-3 py-2 font-mono text-xs text-accent">PRIVATE · S3</span>
+  <section class="rounded-xl border border-line bg-panel p-6 md:p-8" aria-labelledby="worlds-title">
+    <p class="eyebrow mb-4">S3 WORLD LIBRARY</p><h2 id="worlds-title" class="!text-2xl !tracking-tight">Worlds</h2>
+    <p class="mt-4 text-sm leading-7 text-muted">Uploads go only to private S3. Stop the server to upload or choose a map. Start reads the selected world directly from S3 before Minecraft runs.</p>
+    <p v-if="error" role="alert" class="mt-5 text-sm text-red-200">{{ error }}</p><p v-if="notice" role="status" class="mt-5 text-sm leading-7 text-accent">{{ notice }}</p>
+    <div class="mt-7 grid gap-7 xl:grid-cols-2">
+      <div>
+        <div class="flex items-center justify-between gap-4"><h3 class="text-sm font-medium text-ink">Saved maps</h3><button class="text-link text-xs" :disabled="loading" @click="refresh(false)">Refresh</button></div>
+        <p class="mt-3 text-xs leading-6 text-muted">{{ activeKey ? 'A saved S3 world is selected for the next Start.' : 'Next Start: generate a new world.' }}</p>
+        <ul class="mt-4 max-h-96 space-y-3 overflow-y-auto"><li v-for="item in items" :key="item.key" class="rounded-lg border p-4" :class="selected === item.key ? 'border-accent/50' : 'border-line'">
+          <p class="text-sm text-soft">{{ new Date(item.createdAt).toLocaleString() }} <span v-if="activeKey === item.key" class="text-accent">· Next start</span></p><p class="mt-2 font-mono text-xs text-muted">{{ size(item.size) }} · world ZIP</p>
+          <div class="mt-3 flex flex-wrap gap-5"><button class="text-link text-xs" @click="download(item)">Download ZIP ↓</button><button class="text-link text-xs disabled:opacity-40" :disabled="!offline" @click="selected = item.key; confirmed = false">{{ selected === item.key ? 'Selected' : 'Choose world' }}</button></div>
+        </li></ul>
+        <p v-if="!items.length && !loading" class="mt-4 text-xs text-muted">No saved worlds yet.</p><button v-if="cursor" class="text-link mt-4 text-xs" @click="refresh(true)">Load more</button>
+        <label class="mt-6 flex items-start gap-3 text-xs leading-6 text-soft"><input v-model="confirmed" type="checkbox" class="mt-1 accent-accent" :disabled="!offline || !selected" />Use this S3 map on the next Start. I have checked version compatibility.</label>
+        <button class="primary-button mt-4 disabled:opacity-40" :disabled="!offline || !selected || !confirmed" @click="chooseWorld(selected)">Use selected S3 world</button>
+        <button class="text-link mt-5 block text-xs disabled:opacity-40" :disabled="!offline" @click="chooseWorld(null)">Generate a new world on next Start</button>
       </div>
-      <p v-if="error" role="alert" class="mt-5 text-sm leading-6 text-red-200">{{ error }}</p>
-      <p v-if="notice" role="status" class="mt-5 text-sm leading-6 text-accent">{{ notice }}</p>
-      <p v-if="phases[state?.phase]" role="status" class="mt-5 text-sm leading-6 text-amber-200">{{ phases[state.phase] }} Minecraft and idle cleanup pause during the transfer.</p>
-    </div>
-    <div class="grid gap-0 lg:grid-cols-2">
-      <div class="p-6 md:p-8">
-        <h3 class="text-base font-medium text-ink">Save the current world</h3>
-        <p class="mt-3 text-xs leading-6 text-muted">Minecraft stops briefly to save a consistent map, then resumes. Players will disconnect. Saves are manual; save again before destroying a world you want to keep.</p>
-        <button class="primary-button mt-5 disabled:cursor-not-allowed disabled:opacity-40" :disabled="!ready" @click="operation('backup')">Save backup to S3</button>
-        <div class="mt-8 border-t border-line pt-6">
-          <div class="flex flex-wrap items-center justify-between gap-3"><h3 class="text-base font-medium text-ink">Saved maps</h3><button class="text-link text-xs disabled:opacity-40" :disabled="loading" @click="refresh(false)">{{ loading ? 'Refreshing…' : 'Refresh' }}</button></div>
-          <p v-if="!items.length && !loading" class="mt-5 text-xs leading-6 text-muted">No backups yet. Launch a server and save your first world.</p>
-          <ul v-else class="mt-4 max-h-80 space-y-3 overflow-y-auto">
-            <li v-for="item in items" :key="item.key" class="rounded-lg border p-4" :class="selected === item.key ? 'border-accent/50 bg-accent/5' : 'border-line bg-base'">
-              <p class="text-sm text-soft">{{ date(item.createdAt) }}</p><p class="mt-1 font-mono text-xs text-muted">{{ formatSize(item.size) }} · All dimensions</p>
-              <div class="mt-3 flex flex-wrap gap-5"><button class="text-link text-xs" @click="download(item)">Download ZIP ↓</button><button class="text-link text-xs disabled:opacity-40" :disabled="!ready" @click="selected = item.key; file = null; uploadedKey = ''; confirm = false; if (uploadInput) uploadInput.value = ''">{{ selected === item.key ? 'Selected for restore' : 'Select for restore' }}</button></div>
-            </li>
-          </ul>
-          <button v-if="cursor" class="text-link mt-4 text-xs" :disabled="loading" @click="refresh(true)">Load more maps</button>
-        </div>
-      </div>
-      <div class="border-t border-line bg-base/40 p-6 lg:border-l lg:border-t-0 md:p-8">
-        <h3 class="text-base font-medium text-ink">Bring a world back</h3>
-        <p class="mt-3 text-xs leading-6 text-muted">Select a saved map or upload a ZIP from your computer. Use the same Minecraft and mod versions. The ZIP must contain <code>world/level.dat</code>.</p>
-        <label for="map-zip" class="mt-6 block text-xs text-soft">Upload a map ZIP · up to 1 GiB</label>
-        <input id="map-zip" ref="uploadInput" type="file" accept=".zip,application/zip" class="mt-3 block w-full min-w-0 text-xs text-muted file:mr-3 file:rounded file:border file:border-line file:bg-panel file:px-3 file:py-2 file:text-soft disabled:opacity-40" :disabled="busy" @change="chooseFile" />
-        <button v-if="file && !uploadedKey" class="text-link mt-4 text-sm disabled:opacity-40" :disabled="busy" @click="upload">{{ working ? `Uploading… ${progress}%` : 'Upload ZIP to S3' }}</button>
-        <progress v-if="working && file && !uploadedKey" :value="progress" max="100" class="mt-4 w-full accent-accent" aria-label="Map upload progress"></progress>
-        <div v-if="restoreKey" class="mt-6 rounded-lg border border-amber-200/30 bg-amber-200/5 p-4"><p class="text-xs leading-6 text-amber-200">{{ uploadedKey ? `Uploaded map: ${file?.name}` : `Saved map: ${date(items.find(item => item.key === selected)?.createdAt)}` }}</p><p class="mt-2 text-xs leading-6 text-muted">The current map will first be saved to S3, then replaced. Players will disconnect.</p></div>
-        <label class="mt-6 flex items-start gap-3 text-xs leading-6 text-soft"><input v-model="confirm" type="checkbox" class="mt-1 h-4 w-4 shrink-0 accent-amber-200" :disabled="!ready || !restoreKey" />I want to replace the running world with the selected backup.</label>
-        <button class="mt-5 w-full rounded border border-amber-200/50 px-4 py-3 text-sm text-amber-200 transition hover:bg-amber-200/10 disabled:cursor-not-allowed disabled:opacity-40" :disabled="!ready || !confirm || !restoreKey" @click="operation('restore')">Restore selected world</button>
-        <p v-if="!state?.resourcesExist" class="mt-4 text-xs leading-6 text-muted">Launch a server before restoring a map. Saved maps remain available to download while the server is offline.</p>
-        <p class="mt-6 text-xs leading-6 text-muted">Saved backups remain until you remove them in S3. Temporary uploads expire after one day. Private download links expire after five minutes.</p>
+      <div class="rounded-lg border border-line bg-base p-5">
+        <h3 class="text-sm font-medium text-ink">Upload to S3</h3><p class="mt-3 text-xs leading-6 text-muted">ZIP up to 1 GiB, containing world/level.dat and all dimensions. Archive contents are validated during startup. Use a compatible Minecraft/mod version.</p>
+        <p v-if="!offline" class="mt-3 text-xs leading-6 text-amber-200">Uploads are available only when the server is fully down and no operation is active.</p>
+        <input type="file" accept=".zip,application/zip" aria-label="World ZIP" class="mt-5 block w-full min-w-0 text-xs text-soft file:mr-3 file:rounded file:border file:border-line file:bg-panel file:px-3 file:py-2 file:text-soft disabled:opacity-40" :disabled="!offline" @change="chooseFile" />
+        <button class="primary-button mt-5 disabled:opacity-40" :disabled="!offline || !file" @click="upload">{{ working ? `Uploading… ${progress}%` : 'Upload world to S3' }}</button><progress v-if="working" :value="progress" max="100" class="mt-4 w-full accent-accent" aria-label="Upload progress"></progress>
+        <div class="mt-7 border-t border-line pt-5"><h3 class="text-sm font-medium text-ink">Save a running world</h3><p class="mt-3 text-xs leading-6 text-muted">Save a manual S3 snapshot while online. Stop also saves the map automatically before Terraform removes EC2.</p><button class="text-link mt-4 text-sm disabled:opacity-40" :disabled="!online" @click="saveBackup">Save current world to S3</button></div>
+        <p class="mt-6 text-xs leading-6 text-muted">Worlds stay in private S3 after server removal. Downloads work while offline. No direct browser-to-server uploads or live restores.</p>
       </div>
     </div>
   </section>

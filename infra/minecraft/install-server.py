@@ -70,7 +70,7 @@ def choose(project, game, api_version):
     return max(versions, key=lambda v: v['date_published'])
 
 
-def resolve_mods(game, api_version):
+def resolve_mods(game, api_version, projects=None):
     selected = {}
 
     def include(version):
@@ -94,7 +94,7 @@ def resolve_mods(game, api_version):
                 raise RuntimeError('Unresolvable required dependency')
 
     errors = []
-    for project in PROJECTS:
+    for project in (PROJECTS if projects is None else projects):
         try:
             version = choose(project, game, api_version)
             if version:
@@ -108,7 +108,7 @@ def resolve_mods(game, api_version):
 
 
 def install_mods(root, game, api_version):
-    selected = resolve_mods(game, api_version)
+    selected = resolve_mods(game, api_version, selected_projects())
     mods = root / 'mods'
     mods.mkdir(exist_ok=True)
     manifest = mods / '.portfolio-managed.json'
@@ -181,6 +181,14 @@ def tune_configs(root):
         eula.write_text('eula=true\n')
 
 
+def selected_projects():
+    filename = os.environ.get('MINECRAFT_CONFIG_FILE')
+    if not filename:
+        return None
+    value = json.loads(Path(filename).read_text())
+    return ('fabric-api',) + tuple(name for name, enabled in value['mods'].items() if enabled)
+
+
 def main():
     arguments = sys.argv[1:]
     check_only = bool(arguments and arguments[0] == '--check')
@@ -193,7 +201,7 @@ def main():
         if not any(v['id'] == game for v in manifest['versions']):
             raise RuntimeError('Requested Minecraft version is unavailable: ' + game)
         fetch(f'https://meta.fabricmc.net/v2/versions/loader/{game}/{loader}/{installer}/server/jar')
-        resolve_mods(game, api_version)
+        resolve_mods(game, api_version, selected_projects())
         print('[Preflight] Required releases available', flush=True)
         return
     print('[Fabric] Verifying Mojang server and pinned Fabric launcher', flush=True)

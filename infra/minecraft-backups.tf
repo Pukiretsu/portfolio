@@ -36,7 +36,7 @@ resource "aws_s3_bucket_cors_configuration" "minecraft_backups" {
   bucket = aws_s3_bucket.minecraft_backups.id
   cors_rule {
     allowed_origins = local.tools_origins
-    allowed_methods = ["POST", "GET", "HEAD"]
+    allowed_methods = ["POST", "PUT", "GET", "HEAD"]
     allowed_headers = ["*"]
     expose_headers  = ["ETag"]
     max_age_seconds = 300
@@ -60,6 +60,12 @@ resource "aws_s3_bucket_lifecycle_configuration" "minecraft_backups" {
       days_after_initiation = 1
     }
   }
+  rule {
+    id     = "abort-incomplete-world-uploads"
+    status = "Enabled"
+    filter { prefix = "backups/" }
+    abort_incomplete_multipart_upload { days_after_initiation = 1 }
+  }
   depends_on = [aws_s3_bucket_versioning.minecraft_backups]
 }
 resource "aws_s3_bucket_policy" "minecraft_backups" {
@@ -76,4 +82,18 @@ resource "aws_s3_bucket_policy" "minecraft_backups" {
 }
 output "minecraft_backup_bucket" {
   value = aws_s3_bucket.minecraft_backups.id
+}
+
+# Only the deployment role can publish executable bootstrap code.
+resource "aws_s3_object" "minecraft_bootstrap" {
+  for_each = {
+    "server_config.py"       = "${path.module}/../backend/minecraft_proxy/server_config.py"
+    "world.py"               = "${path.module}/../scripts/minecraft-world-remote.py"
+    "minecraft-bootstrap.py" = "${path.module}/../scripts/minecraft-bootstrap.py"
+  }
+  bucket       = aws_s3_bucket.minecraft_backups.id
+  key          = "bootstrap/${each.key}"
+  source       = each.value
+  source_hash  = filesha256(each.value)
+  content_type = "text/x-python"
 }

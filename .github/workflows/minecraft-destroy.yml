@@ -11,6 +11,11 @@ on:
         required: true
         default: false
         type: boolean
+      skip_backup:
+        description: Recovery only - destroy without saving a broken or empty server
+        required: false
+        default: false
+        type: boolean
       automatic:
         description: 'Internal idle cleanup: requires a fresh graceful-stop acknowledgement'
         required: false
@@ -81,6 +86,9 @@ jobs:
         env:
           INPUT_EXPECTED_INSTANCE_ID: ${{ inputs.expected_instance_id }}
         run: python3 ../../.github/scripts/minecraft-control.py verify-auto-shutdown
+      - name: Save the stopped world to S3 and select it for next launch
+        if: ${{ !inputs.skip_backup }}
+        run: python3 ../../.github/scripts/minecraft-stop.py
       - name: Destroy server, disks, network and DNS through Terraform
         run: terraform destroy -input=false -auto-approve -lock-timeout=5m
       - name: Verify complete teardown

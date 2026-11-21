@@ -1,4 +1,4 @@
-name: Minecraft map backup or restore
+name: Minecraft map backup
 on:
   workflow_dispatch:
     inputs:
@@ -10,7 +10,7 @@ on:
         description: Map operation
         required: true
         type: choice
-        options: [backup, restore]
+        options: [backup]
       object_key:
         description: Private S3 archive key supplied by the dashboard
         required: true

@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 exec > >(tee -a /var/log/minecraft-bootstrap.log | logger -t minecraft-bootstrap -s 2>/dev/console) 2>&1
+export AWS_DEFAULT_REGION='${aws_region}'
 echo '[Java] Preparing ARM64 Temurin 25 and provisioning tools'
 [ "$(uname -m)" = aarch64 ] || { echo 'ERROR: aarch64 is required'; exit 1; }
 # AL2023 ships curl-minimal; avoid conflicting with it by installing only if missing.
@@ -55,7 +56,14 @@ if systemctl cat minecraft.service >/dev/null 2>&1; then
 fi
 # Compression keeps the complete EC2 user-data below its 16 KiB limit.
 echo '${installer_gzip}' | base64 --decode | gzip --decompress > /opt/minecraft/install-server.py
+install -d /opt/minecraft-bootstrap
+for name in server_config.py world.py minecraft-bootstrap.py; do
+  aws s3 cp 's3://${backup_bucket}/bootstrap/'"$name" /opt/minecraft-bootstrap/"$name" --only-show-errors
+done
+aws s3 cp 's3://${backup_bucket}/${launch_config_key}' /opt/minecraft-bootstrap/launch.json --only-show-errors
+export MINECRAFT_CONFIG_FILE=/opt/minecraft-bootstrap/launch.json
 python3 /opt/minecraft/install-server.py '${version}' '${fabric_loader_version}' '${fabric_installer_version}' '${fabric_api_version}'
+python3 /opt/minecraft-bootstrap/minecraft-bootstrap.py /opt/minecraft-bootstrap/launch.json '${backup_bucket}'
 chown -R minecraft:minecraft /srv/minecraft
 cat > /etc/systemd/system/minecraft.service <<'SERVICE'
 [Unit]

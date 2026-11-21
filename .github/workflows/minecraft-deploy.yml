@@ -6,6 +6,10 @@ on:
         description: 'Launcher operation ID (leave empty for manual runs)'
         required: false
         type: string
+      launch_config_key:
+        description: Immutable S3 launch snapshot (optional for manual launches)
+        required: false
+        type: string
 permissions:
   contents: read
   id-token: write
@@ -61,6 +65,10 @@ jobs:
           : "${TF_VAR_cloudflare_zone_id:?Missing CLOUDFLARE_ZONE_ID}"
           : "${TF_VAR_cloudflare_api_token:?Missing CLOUDFLARE_API_TOKEN}"
           test "$TF_VAR_accept_eula" = true || { echo 'Accept the Minecraft EULA and set MINECRAFT_ACCEPT_EULA=true first.'; exit 1; }
+      - name: Load configuration from private S3
+        env:
+          INPUT_LAUNCH_CONFIG_KEY: ${{ inputs.launch_config_key }}
+        run: python3 ../../.github/scripts/minecraft-config.py
       - name: Refuse to replace an existing server or world
         run: python3 ../../.github/scripts/minecraft-control.py ensure-offline
       - name: Initialize isolated Minecraft state
@@ -71,6 +79,8 @@ jobs:
           terraform validate
       - name: Check required game, Fabric and mod releases before provisioning
         run: python3 install-server.py --check "$TF_VAR_minecraft_version" "$TF_VAR_fabric_loader_version" "$TF_VAR_fabric_installer_version" "$TF_VAR_fabric_api_version"
+      - name: Validate selected S3 world before allocating EC2
+        run: python3 ../../.github/scripts/minecraft-config.py check-world
       - name: Deploy server and DNS
         run: terraform apply -input=false -auto-approve -lock-timeout=5m
       - name: Verify IPv6 DNS and Minecraft readiness

@@ -19,6 +19,8 @@ resource "aws_instance" "server" {
     monitor_gzip             = base64gzip(file("${path.module}/../../backend/minecraft_proxy/activity_monitor.py"))
     activity_gzip            = base64gzip(file("${path.module}/../../backend/minecraft_proxy/activity.py"))
     protocol_gzip            = base64gzip(file("${path.module}/../../backend/minecraft_proxy/protocol.py"))
+    backup_bucket            = "${data.aws_caller_identity.current.account_id}-portfolio-minecraft-backups"
+    launch_config_key        = var.launch_config_key
     aws_region               = var.aws_region
   })
   iam_instance_profile = aws_iam_instance_profile.activity.name
@@ -37,7 +39,7 @@ resource "aws_instance" "server" {
     delete_on_termination = true
   }
   volume_tags = local.tags
-  tags        = { Name = "portfolio-minecraft" }
+  tags        = { Name = "portfolio-minecraft", LaunchConfig = var.launch_config_key }
   lifecycle {
     precondition {
       condition     = var.accept_eula

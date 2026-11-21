@@ -57,3 +57,12 @@ variable "fabric_api_version" {
     error_message = "Use a Fabric API release such as 0.166.2+26.3."
   }
 }
+
+variable "launch_config_key" {
+  type    = string
+  default = "settings/server.json"
+  validation {
+    condition     = var.launch_config_key == "settings/server.json" || can(regex("^launches/[0-9a-f-]{36}[.]json$", var.launch_config_key))
+    error_message = "Use a persisted S3 launch configuration."
+  }
+}

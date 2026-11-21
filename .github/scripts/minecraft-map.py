@@ -32,9 +32,9 @@ def command_script(action, object_key, bucket, token):
 
 def main():
     action = os.environ['MAP_ACTION']
-    if action not in ('backup', 'restore'):
+    if action not in ('backup', 'stop'):
         raise RuntimeError('Unsupported map operation')
-    object_key = key(os.environ['MAP_OBJECT_KEY'], backups_only=action == 'backup')
+    object_key = key(os.environ['MAP_OBJECT_KEY'], backups_only=True)
     identity = os.environ['MAP_INSTANCE_ID']
     if not re.fullmatch(r'i-[0-9a-f]+', identity):
         raise RuntimeError('Invalid instance ID')

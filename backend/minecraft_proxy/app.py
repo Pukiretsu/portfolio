@@ -13,6 +13,9 @@ import uuid
 from protocol import ping
 from activity import deadline, healthy, idle_view
 import backups
+import settings
+import uploads
+from server_config import validate
 
 
 class ApiError(Exception):
@@ -52,7 +55,7 @@ def status():
     idle = None
     message = state.get("error", "")
     if busy:
-        phase = state.get("phase") if state.get("phase") in ("destroying", "backing_up", "restoring") else "provisioning"
+        phase = state.get("phase") if state.get("phase") in ("destroying", "backing_up", "restoring", "uploading", "configuring") else "provisioning"
     elif state.get("phase") == "error":
         phase = "error"
     if servers:
@@ -104,11 +107,11 @@ def fail_operation(operation_id, message, release):
 
 
 def dispatch(action, body, *, automatic_instance_id=None):
-    if action not in ('deploy', 'destroy', 'backup', 'restore'):
+    if action not in ('deploy', 'destroy', 'backup'):
         raise ApiError(400, 'Unknown operation')
     object_key = None
     identity = None
-    if action in ('backup', 'restore'):
+    if action == 'backup':
         servers = instances()
         if len(servers) != 1 or servers[0]['State']['Name'] != 'running':
             raise ApiError(409, 'Launch the server and wait for it to be ready before transferring a map')
@@ -116,15 +119,7 @@ def dispatch(action, body, *, automatic_instance_id=None):
         activity = record('activity#' + identity)
         if activity.get('shutdown_requested'):
             raise ApiError(409, 'Idle destruction has already started')
-        if action == 'restore':
-            if body.get('confirmRestore') is not True:
-                raise ApiError(400, 'Confirm replacement of the running world')
-            try:
-                object_key = backups.existing(client('s3'), body.get('key'))
-            except ValueError as error:
-                raise ApiError(400, str(error)) from error
-        else:
-            object_key = 'backups/' + str(uuid.uuid4()) + '.zip'
+        object_key = 'backups/' + str(uuid.uuid4()) + '.zip'
     operation_phase = {'deploy': 'provisioning', 'destroy': 'destroying', 'backup': 'backing_up', 'restore': 'restoring'}[action]
     if action == "destroy" and body.get("confirmDestroy") is not True:
         raise ApiError(400, "Confirm that destroying the server permanently deletes its world and disk.")
@@ -154,13 +149,25 @@ def dispatch(action, body, *, automatic_instance_id=None):
             raise ApiError(409, "Another operation is already running. Wait for it to finish.") from error
         raise
     inputs = {"operation_id": operation_id}
+    if action == 'deploy':
+        # An immutable snapshot keeps a queued launch independent of later UI changes.
+        try:
+            config = settings.read(client('s3'), backups.bucket())
+            if config['worldKey']:
+                backups.existing(client('s3'), config['worldKey'], backups_only=True)
+            config_key = 'launches/' + operation_id + '.json'
+            client('s3').put_object(Bucket=backups.bucket(), Key=config_key, Body=json.dumps(config).encode(), ContentType='application/json')
+            inputs['launch_config_key'] = config_key
+        except Exception as error:
+            fail_operation(operation_id, 'Launch configuration could not be loaded. Review Configuration and Worlds.', release=True)
+            raise ApiError(400, 'Cannot load the selected S3 world or launch configuration') from error
     if action == "destroy":
         inputs["confirm_destroy"] = "true"
         if automatic_instance_id:
             inputs["automatic"] = "true"
             inputs["expected_instance_id"] = automatic_instance_id
     workflow = action
-    if action in ('backup', 'restore'):
+    if action == 'backup':
         workflow = 'backup'
         inputs.update(action=action, object_key=object_key, expected_instance_id=identity)
     request = urllib.request.Request(
@@ -198,6 +205,89 @@ def idle_check():
     return {"skipped": "no_confirmed_idle_shutdown"}
 
 
+def offline_lock(phase='configuring', seconds=60):
+    try:
+        identity = settings.lock(client('dynamodb'), os.environ['TABLE_NAME'], phase, seconds)
+    except Exception as error:
+        if getattr(error, 'response', {}).get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            raise ApiError(409, 'Another operation is running') from error
+        raise
+    if instances():
+        settings.unlock(client('dynamodb'), os.environ['TABLE_NAME'], identity)
+        raise ApiError(409, 'Stop the server completely before changing settings or uploading a world')
+    return identity
+
+
+def configuration():
+    desired = settings.read(client('s3'), backups.bucket())
+    active = None
+    for server in instances():
+        key = next((t['Value'] for t in server.get('Tags', []) if t['Key'] == 'LaunchConfig'), '')
+        if key.startswith('launches/') and key.endswith('.json'):
+            active = json.loads(client('s3').get_object(Bucket=backups.bucket(), Key=key)['Body'].read())
+    return {'desired': desired, 'applied': active}
+
+
+def configure(body, select_world=False):
+    identity = offline_lock()
+    try:
+        value = settings.read(client('s3'), backups.bucket()) if select_world else validate(body)
+        if select_world:
+            value['worldKey'] = backups.existing(client('s3'), body.get('key'), backups_only=True) if body.get('key') else None
+        elif value['worldKey']:
+            backups.existing(client('s3'), value['worldKey'], backups_only=True)
+        return {'desired': settings.write(client('s3'), backups.bucket(), value)}
+    except ValueError as error:
+        raise ApiError(400, str(error)) from error
+    finally:
+        settings.unlock(client('dynamodb'), os.environ['TABLE_NAME'], identity)
+
+
+def upload_operation(route, body, owner):
+    db, s3, table = client('dynamodb'), client('s3'), os.environ['TABLE_NAME']
+    if route.endswith('/upload'):
+        identity = offline_lock('uploading', 960)
+        try:
+            return uploads.begin(s3, db, table, backups.bucket(), body, owner, identity)
+        except Exception:
+            settings.unlock(db, table, identity)
+            raise
+    identity = body.get('operationId')
+    session = uploads.load(db, table, identity, owner)
+    state = record()
+    if state.get('operation_id') != identity or state.get('lease_until', 0) < time.time():
+        raise ApiError(409, 'Upload session expired; start a new upload')
+    if instances():
+        raise ApiError(409, 'The server must remain down throughout the upload')
+    if route.endswith('/cancel'):
+        try:
+            s3.abort_multipart_upload(Bucket=backups.bucket(), Key=session['key'], UploadId=session['uploadId'])
+        except Exception as error:
+            if getattr(error, 'response', {}).get('Error', {}).get('Code') != 'NoSuchUpload':
+                raise
+        result = {'cancelled': True}
+    else:
+        result = uploads.complete(s3, backups.bucket(), session, body.get('parts'))
+    settings.unlock(db, table, identity)
+    return result
+
+
+def versions(game):
+    if game and (not isinstance(game, str) or not __import__('re').fullmatch(r'\d+\.\d+(?:\.\d+)?', game)):
+        raise ApiError(400, 'Invalid Minecraft version')
+    def read(url):
+        with urllib.request.urlopen(url, timeout=5) as response:
+            return json.load(response)
+    releases = read('https://piston-meta.mojang.com/mc/game/version_manifest_v2.json')
+    loaders = read('https://meta.fabricmc.net/v2/versions/loader')
+    result = {'minecraft': [v['id'] for v in releases['versions'] if v['type'] == 'release'][:30], 'loaders': [v['version'] for v in loaders[:30]]}
+    if game:
+        import urllib.parse
+        query = urllib.parse.urlencode({'game_versions': json.dumps([game]), 'loaders': '["fabric"]'})
+        result['fabricApi'] = [v['version_number'] for v in read('https://api.modrinth.com/v2/project/fabric-api/version?' + query)][:30]
+    return result
+
+
 def handler(event, context):
     try:
         rule = os.environ.get("IDLE_RULE_ARN")
@@ -211,15 +301,19 @@ def handler(event, context):
         route = event.get("routeKey", "")
         if route == "GET /minecraft/status":
             data, code = status(), 200
+        elif route == 'GET /minecraft/config':
+            data, code = configuration(), 200
+        elif route == 'GET /minecraft/versions':
+            data, code = versions((event.get('queryStringParameters') or {}).get('minecraft')), 200
         elif route == 'GET /minecraft/backups':
             try:
                 data = backups.catalog(client('s3'), (event.get('queryStringParameters') or {}).get('cursor'))
                 code = 200
             except ValueError as error:
                 raise ApiError(400, str(error)) from error
-        elif route in ("POST /minecraft/deploy", "POST /minecraft/destroy", "POST /minecraft/backup", "POST /minecraft/restore", "POST /minecraft/backups/upload", "POST /minecraft/backups/download"):
+        elif route in ("POST /minecraft/deploy", "POST /minecraft/destroy", "POST /minecraft/backup", "POST /minecraft/restore", "POST /minecraft/backups/upload", "POST /minecraft/backups/download", "POST /minecraft/backups/complete", "POST /minecraft/backups/cancel", "POST /minecraft/config"):
             raw = event.get("body") or "{}"
-            if not isinstance(raw, str) or len(raw) > 2048:
+            if not isinstance(raw, str) or len(raw) > 65536:
                 raise ApiError(400, "Request is too large.")
             try:
                 if event.get("isBase64Encoded"):
@@ -229,14 +323,17 @@ def handler(event, context):
                     raise ValueError()
             except (ValueError, UnicodeError) as error:
                 raise ApiError(400, "A JSON object is required.") from error
-            if route in ('POST /minecraft/backups/upload', 'POST /minecraft/backups/download'):
-                try:
-                    operation = backups.upload if route.endswith('/upload') else backups.download
-                    data, code = operation(client('s3'), body), 200
-                except ValueError as error:
-                    raise ApiError(400, str(error)) from error
-            else:
-                data, code = dispatch(route.rsplit("/", 1)[1], body), 202
+            try:
+                if route in ('POST /minecraft/backups/upload', 'POST /minecraft/backups/complete', 'POST /minecraft/backups/cancel'):
+                    data, code = upload_operation(route, body, claims['sub']), 200
+                elif route == 'POST /minecraft/backups/download':
+                    data, code = backups.download(client('s3'), body), 200
+                elif route in ('POST /minecraft/config', 'POST /minecraft/restore'):
+                    data, code = configure(body, select_world=route.endswith('/restore')), 200
+                else:
+                    data, code = dispatch(route.rsplit("/", 1)[1], body), 202
+            except ValueError as error:
+                raise ApiError(400, str(error)) from error
         else:
             raise ApiError(404, "Unknown endpoint.")
     except ApiError as error:

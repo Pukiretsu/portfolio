@@ -32,7 +32,10 @@ resource "aws_iam_role_policy" "activity" {
       Effect = "Allow", Action = ["s3:GetObject"]
       Resource = [
         "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-portfolio-minecraft-backups/backups/*",
-        "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-portfolio-minecraft-backups/uploads/*"
+        "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-portfolio-minecraft-backups/uploads/*",
+        "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-portfolio-minecraft-backups/bootstrap/*",
+        "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-portfolio-minecraft-backups/settings/*",
+        "arn:aws:s3:::${data.aws_caller_identity.current.account_id}-portfolio-minecraft-backups/launches/*"
       ]
       }, {
       Effect   = "Allow", Action = ["s3:PutObject", "s3:AbortMultipartUpload"]

@@ -36,18 +36,18 @@ def world():
     return path
 
 
-def pause(token):
+def pause(token, allow_shutdown=False):
     if HOLD.exists():
         raise RuntimeError('Another map transfer is active; resume it first')
     monitor_state = Path('/var/lib/minecraft-monitor/state.json')
-    if monitor_state.exists() and json.loads(monitor_state.read_text()).get('shutdown_requested'):
+    if not allow_shutdown and monitor_state.exists() and json.loads(monitor_state.read_text()).get('shutdown_requested'):
         raise RuntimeError('Idle destruction is already requested; cannot safely begin a transfer')
     state = {'game': active('minecraft.service'), 'monitor': active('minecraft-activity.service'), 'token': token}
     HOLD.write_text(json.dumps(state))
     HOLD.chmod(0o600)
     # A stopped monitor stops fresh acknowledgements; resource deletion stays in Terraform.
     service('stop', 'minecraft-activity.service')
-    if monitor_state.exists() and json.loads(monitor_state.read_text()).get('shutdown_requested'):
+    if not allow_shutdown and monitor_state.exists() and json.loads(monitor_state.read_text()).get('shutdown_requested'):
         raise RuntimeError('Idle shutdown was requested before maintenance acquired the monitor')
     service('stop', 'minecraft.service')
     if active('minecraft.service'):
@@ -109,8 +109,28 @@ def backup(token):
     return destination
 
 
-def restore(filename, token):
-    require_paused(token)
+def validate_archive(archive):
+    names = set()
+    for item in archive.infolist():
+        path = Path(item.filename)
+        mode = item.external_attr >> 16
+        if (path.is_absolute() or '..' in path.parts or '\\' in item.filename
+                or not path.parts or path.parts[0] != 'world'
+                or stat.S_ISLNK(mode) or item.filename in names):
+            raise RuntimeError('Unsafe or duplicate ZIP entry: ' + item.filename)
+        names.add(item.filename)
+    if 'world/level.dat' not in names:
+        raise RuntimeError('ZIP must contain world/level.dat; use a downloaded map backup')
+    required = sum(item.file_size for item in archive.infolist())
+    return required
+
+
+def restore(filename, token, bootstrap=False):
+    if bootstrap:
+        if active('minecraft.service'):
+            raise RuntimeError('Bootstrap restore requires Java to be stopped')
+    else:
+        require_paused(token)
     source = Path(filename)
     if source.is_symlink() or source.parent != TRANSFER or not source.is_file():
         raise RuntimeError('Upload the ZIP into minecraft-transfers first')
@@ -121,18 +141,7 @@ def restore(filename, token):
     old = ROOT / ('.world-before-import-' + uuid.uuid4().hex)
     try:
         with zipfile.ZipFile(source) as archive:
-            names = set()
-            for item in archive.infolist():
-                path = Path(item.filename)
-                mode = item.external_attr >> 16
-                if (path.is_absolute() or '..' in path.parts or '\\' in item.filename
-                        or not path.parts or path.parts[0] != 'world'
-                        or stat.S_ISLNK(mode) or item.filename in names):
-                    raise RuntimeError('Unsafe or duplicate ZIP entry: ' + item.filename)
-                names.add(item.filename)
-            if 'world/level.dat' not in names:
-                raise RuntimeError('ZIP must contain world/level.dat; use a downloaded map backup')
-            required = sum(item.file_size for item in archive.infolist())
+            required = validate_archive(archive)
             if required + 512 * 1024 * 1024 > shutil.disk_usage(ROOT).free:
                 raise RuntimeError('Insufficient free disk space for safe restore')
             archive.extractall(staging)

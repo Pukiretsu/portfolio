@@ -65,7 +65,7 @@ def authorize(region, identity, key):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['ssh', 'download', 'upload', 'resume'])
+    parser.add_argument('action', choices=['ssh', 'download', 'resume'])
     parser.add_argument('archive', nargs='?', help='Local ZIP path for upload or destination for download')
     parser.add_argument('--region', default=os.environ.get('AWS_REGION', 'us-east-1'))
     parser.add_argument('--instance', help='Optional current Minecraft instance ID')

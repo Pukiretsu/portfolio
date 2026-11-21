@@ -30,17 +30,8 @@ class BackupApiTests(unittest.TestCase):
                 self.assertEqual(app.handler({'routeKey': route}, None)['statusCode'], 403)
                 client.assert_not_called()
 
-    def test_upload_policy_has_exact_prefix_size_type_and_expiry(self):
-        s3 = MagicMock()
-        s3.generate_presigned_post.return_value = {'url': 'https://private.s3.amazonaws.com', 'fields': {}}
-        result = backups.upload(s3, {'filename': 'my-world.zip', 'size': 4096, 'key': 'evil/key'})
-        self.assertTrue(result['key'].startswith('uploads/'))
-        arguments = s3.generate_presigned_post.call_args.kwargs
-        self.assertEqual(arguments['Key'], result['key'])
-        self.assertEqual(arguments['Conditions'], [{'Content-Type': 'application/zip'}, ['content-length-range', 1, 4096]])
-        self.assertEqual(arguments['ExpiresIn'], 900)
-        for size in (0, -1, True, '4096', 1024 ** 3 + 1):
-            with self.assertRaises(ValueError): backups.upload(s3, {'filename': 'map.zip', 'size': size})
+    def test_legacy_presigned_post_upload_is_not_exposed(self):
+        self.assertFalse(hasattr(backups, 'upload'))
 
     def test_download_rejects_arbitrary_keys_and_temporary_uploads(self):
         s3 = MagicMock()
@@ -61,10 +52,10 @@ class BackupApiTests(unittest.TestCase):
         self.assertEqual(s3.list_objects_v2.call_args.kwargs['Prefix'], 'backups/')
         self.assertEqual(s3.list_objects_v2.call_args.kwargs['ContinuationToken'], 'cursor')
 
-    def test_restore_requires_explicit_confirmation_and_running_instance(self):
-        with patch.object(app, 'instances', return_value=[INSTANCE]), patch.object(app, 'record', return_value={}), patch.object(app, 'client') as client:
-            self.assertEqual(app.handler(event('POST /minecraft/restore', {'key': KEY, 'confirmRestore': 'true'}), None)['statusCode'], 400)
-            client.assert_not_called()
+    def test_world_selection_and_upload_require_no_server_resources(self):
+        for route in ('POST /minecraft/restore', 'POST /minecraft/backups/upload', 'POST /minecraft/config'):
+            with patch.object(app, 'instances', return_value=[INSTANCE]), patch.object(app, 'client', return_value=MagicMock()):
+                self.assertEqual(app.handler(event(route, {'key': KEY}), None)['statusCode'], 409)
         with patch.object(app, 'instances', return_value=[]):
             self.assertEqual(app.handler(event('POST /minecraft/backup'), None)['statusCode'], 409)
 
@@ -79,15 +70,15 @@ class BackupApiTests(unittest.TestCase):
         response = MagicMock()
         response.__enter__.return_value.status = 204
         with patch.object(app, 'instances', return_value=[INSTANCE]), patch.object(app, 'record', return_value={}), patch.object(app, 'client', side_effect=clients.__getitem__), patch('urllib.request.urlopen', return_value=response) as send:
-            result = app.handler(event('POST /minecraft/restore', {'key': UPLOAD, 'confirmRestore': True, 'workflow': 'evil.yml', 'expected_instance_id': 'evil'}), None)
+            result = app.handler(event('POST /minecraft/backup', {'workflow': 'evil.yml', 'expected_instance_id': 'evil'}), None)
         self.assertEqual(result['statusCode'], 202)
-        self.assertEqual(json.loads(result['body'])['phase'], 'restoring')
+        self.assertEqual(json.loads(result['body'])['phase'], 'backing_up')
         request = send.call_args.args[0]
         self.assertTrue(request.full_url.endswith('/minecraft-backup.yml/dispatches'))
         inputs = json.loads(request.data)['inputs']
         self.assertEqual(inputs['expected_instance_id'], INSTANCE['InstanceId'])
-        self.assertEqual(inputs['object_key'], UPLOAD)
-        self.assertEqual(inputs['action'], 'restore')
+        self.assertTrue(inputs['object_key'].startswith('backups/'))
+        self.assertEqual(inputs['action'], 'backup')
         self.assertNotIn('secret-token', result['body'])
 
     def test_busy_backup_status_does_not_revert_to_provisioning(self):
@@ -112,48 +103,26 @@ class MapWorkerTests(unittest.TestCase):
             fake.backup.return_value = archive
             with patch.object(worker, 'world', fake), patch.object(worker, 'copy', side_effect=RuntimeError('S3 unavailable')), patch.object(sys, 'argv', ['worker', 'backup', KEY, 'private-maps', 'token']):
                 with self.assertRaises(RuntimeError): worker.main()
-            fake.pause.assert_called_once_with('token')
+            fake.pause.assert_called_once_with('token', allow_shutdown=False)
             fake.resume.assert_called_once_with('token')
             fake.restore.assert_not_called()
 
-    def test_restore_wont_replace_world_until_rollback_copy_is_saved(self):
-        with tempfile.TemporaryDirectory() as directory:
-            previous = Path(directory) / 'previous.zip'
-            previous.write_bytes(b'previous-map')
-            fake = MagicMock()
-            fake.TRANSFER = Path(directory)
-            fake.backup.return_value = previous
-            calls = []
-            def copy(source, destination):
-                calls.append((source, destination))
-                if source.startswith('s3://'):
-                    Path(destination).write_bytes(b'uploaded-map')
-                else:
-                    raise RuntimeError('Rollback backup upload failed')
-            with patch.object(worker, 'world', fake), patch.object(worker, 'copy', side_effect=copy), patch.object(sys, 'argv', ['worker', 'restore', UPLOAD, 'private-maps', 'token']):
-                with self.assertRaises(RuntimeError): worker.main()
-            fake.restore.assert_not_called()
-            fake.resume.assert_called_once_with('token')
-            self.assertEqual(len(calls), 2)
+    def test_live_restores_are_rejected_before_touching_world(self):
+        fake = MagicMock()
+        with patch.object(worker, 'world', fake), patch.object(sys, 'argv', ['worker', 'restore', KEY, 'private-maps', 'token']):
+            with self.assertRaises(RuntimeError): worker.main()
+        fake.pause.assert_not_called()
+        fake.restore.assert_not_called()
 
-    def test_restored_upload_is_saved_as_a_durable_vault_entry(self):
+    def test_successful_stop_snapshot_leaves_java_and_monitor_down(self):
         with tempfile.TemporaryDirectory() as directory:
-            previous = Path(directory) / 'previous.zip'
-            previous.write_bytes(b'previous-map')
-            fake = MagicMock()
-            fake.TRANSFER = Path(directory)
-            fake.backup.return_value = previous
-            copies = []
-            def copy(source, destination):
-                copies.append((source, destination))
-                if source.startswith('s3://'):
-                    Path(destination).write_bytes(b'restored-map')
-            with patch.object(worker, 'world', fake), patch.object(worker, 'copy', side_effect=copy), patch.object(sys, 'argv', ['worker', 'restore', UPLOAD, 'private-maps', 'token']):
+            archive = Path(directory) / 'map.zip'
+            archive.write_bytes(b'map')
+            fake = MagicMock(); fake.backup.return_value = archive
+            with patch.object(worker, 'world', fake), patch.object(worker, 'copy'), patch.object(sys, 'argv', ['worker', 'stop', KEY, 'private-maps', 'token']):
                 worker.main()
-            self.assertEqual(len(copies), 3)
-            self.assertTrue(copies[-1][1].startswith('s3://private-maps/backups/'))
-            fake.restore.assert_called_once()
-            fake.resume.assert_called_once_with('token')
+            fake.pause.assert_called_once_with('token', allow_shutdown=True)
+            fake.resume.assert_not_called()
 
     def test_successful_backup_uploads_only_selected_key_and_resumes(self):
         with tempfile.TemporaryDirectory() as directory:

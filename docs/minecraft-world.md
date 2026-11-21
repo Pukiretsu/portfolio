@@ -1,50 +1,36 @@
-# Download and restore only the Minecraft map
+# Minecraft workspace and S3 world lifecycle
 
-The transfer helper uses SSH and SCP through AWS Systems Manager. Port 22 stays closed. Terraform enables the existing AL2023 instance's SSM Agent through its instance IAM policy; the server is not replaced. Your authenticated AWS CLI identity needs `ec2:DescribeInstances`, `dynamodb:GetItem` on the control table, `ssm:SendCommand` (`AWS-RunShellScript` and the Minecraft instance), `ssm:GetCommandInvocation`, `ssm:StartSession` (`AWS-StartSSHSession` and the instance), and permission to terminate its own SSM sessions. Use your personal AWS login; frontend credentials cannot grant shell access.
+The Minecraft tool at `/tools/minecraft` has four sidebar views, with a hamburger menu on mobile:
 
-Install AWS CLI, OpenSSH, Python 3, and the [AWS Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html). Run these commands from the repository root with AWS credentials active in `us-east-1`:
+- **Dashboard**: status, player telemetry, idle deadline, and the configuration snapshot used by the running server.
+- **Start / Stop**: Start uses a saved S3 blueprint and selected world. Stop saves the world to S3 before Terraform removes EC2, EBS and DNS. Automatic idle shutdown follows the same save-before-destroy flow.
+- **Configuration**: change Minecraft/Fabric/Fabric API versions, supported `server.properties` settings, enabled mods, C2ME workers, and additional mod config files. Changes are allowed only with no Minecraft resources present and no operation in progress.
+- **Worlds**: download saved ZIPs any time; upload and choose the next world only while fully down. Select a map and confirm **Use selected S3 world**, or choose to generate a new world on the next Start.
 
-```bash
-# Download a ZIP containing only world/ (all dimensions, player data, entities, etc.).
-python3 scripts/minecraft-world.py download
+## Data flow
 
-# Open an interactive SSH shell on the current server.
-python3 scripts/minecraft-world.py ssh
+The browser uploads ZIP parts directly into private S3; the authenticated API completes the upload only while holding an offline operation lock. No browser-to-EC2 upload or live restore is exposed. After completion the S3 upload session is closed, so old part links cannot overwrite a completed map. Incomplete multipart uploads are removed by lifecycle rules after one day. Upload sessions expire after 16 minutes.
 
-# Later, upload a previously downloaded ZIP and replace the active map.
-python3 scripts/minecraft-world.py upload minecraft-backups/world-EXAMPLE.zip --confirm-restore
-```
+Configuration lives in `settings/server.json`. Start takes an immutable `launches/<operation>.json` snapshot. The workflow downloads it, resolves enabled mods and exact versions, and validates the selected S3 ZIP before allocating EC2. On EC2, bootstrap fetches the trusted code, snapshot and world from S3, applies the settings, restores the map while Java is stopped, and starts Minecraft last. A running server's **Configuration** view shows both saved settings and its applied launch snapshot; manual SSH edits are not represented by that snapshot.
 
-Downloads go into the ignored `minecraft-backups/` folder, or specify a destination ZIP as the second argument. Keep this copy on your own computer: Terraform destroy permanently deletes the EC2 disk and any archives kept there. The server must be running to transfer files. Never run a destroy workflow while transferring a world.
+Stop quiesces Minecraft and the idle monitor, uploads the complete map to `backups/`, selects that backup for the next launch, then executes `terraform destroy` against the existing Minecraft backend. Failure to save blocks destruction. The persistent S3 bucket is part of the main infrastructure and survives Minecraft destruction.
 
-The helper discovers the current instance each time, registers a local public SSH key for `ec2-user`, and uses SCP over a Session Manager tunnel. A dedicated private key is created under ignored `.local/minecraft/` (mode 600); it is never uploaded, committed, or placed into Terraform state. To use an existing key instead, append `--identity ~/.ssh/id_ed25519` (the matching `.pub` is required). Each machine must run the helper with its own AWS login and key. The server also retains your authorized public key until it is destroyed.
+ZIPs must contain `world/level.dat`; include all dimensions and player data. Minecraft 26.3 uses `world/dimensions/minecraft/the_nether` and `the_end`. Only map files are restored; mods, logs, JVM binaries and server configuration come from the selected blueprint instead. ZIP paths, symlinks, CRCs, expanded size and disk space are checked. ZIPs are limited to 1 GiB compressed and 20 GiB expanded (the instance must also have enough free disk). Changing game or mod versions does not migrate worlds; select a compatible world and keep a copy before downgrading.
 
-Backups pause the idle monitor and gracefully stop Java to flush the map, then ZIP only the `level-name` directory from `server.properties`. Mods, JARs, service files, logs, and server configuration are excluded. The tool downloads that ZIP through SCP and restores the prior service state in a `finally` block. Players are disconnected during this brief maintenance window. Restores validate that the archive contains only `world/...`, reject traversal and symlinks, preserve the previous map in `/srv/minecraft/.world-before-import-*`, and set `minecraft:minecraft` ownership. Use backups with the same Minecraft/mod versions; restore does not downgrade or migrate worlds.
+## Configuration limits
 
-Remote ZIPs are retained under `/home/ec2-user/minecraft-transfers/`. Old map copies are retained on the instance until you explicitly remove them or destroy the server; monitor free disk space. Both locations are destroyed with EC2. Do not commit maps or private keys.
+The t4g.medium still uses ARM64 Temurin Java 25, a 2800M G1 heap, swap fallback, view distance up to 8 and simulation distance up to 6. C2ME workers are limited to 1–2. Fabric API is required; other supported mods can be toggled. Start validates version/mod availability before EC2 allocation.
 
-If your terminal or network is killed during a transfer, Java and the idle monitor may remain paused. Once connected again, run:
+Custom mod files are a JSON object mapping simple `.json`, `.toml` or `.properties` filenames to text, written only under `/srv/minecraft/config/`. Up to ten files, 4 KiB each, are allowed. `c2me.toml` is managed separately. These editors validate syntax/path limits, not each mod's semantic settings. Whitelist entries still require console/SSH administration if the whitelist is enabled.
 
-```bash
-python3 scripts/minecraft-world.py resume
-```
+## Storage and security
 
-The idle countdown resumes from the end of maintenance. An interactive `ssh` shell alone does not pause the idle timer. The helper refuses transfers once an infrastructure operation or acknowledged idle shutdown is underway. Resource removal continues exclusively through Terraform.
+Bucket: `<AWS_ACCOUNT_ID>-portfolio-minecraft-backups`. Public access is blocked; TLS, encryption and versioning are enabled. Saved maps are retained indefinitely; storage charges apply. Terraform destroy protection guards the bucket. Five-minute download links are bearer links: do not share them. Cognito protects all settings, upload, download and control endpoints. AWS/GitHub credentials are never sent to the browser.
 
-## Backups from the Minecraft tool page
+No additional GitHub secrets or variables are needed. Update the deployment role's inline policy from `docs/minecraft-deployment-policy.json`, then deploy the main infrastructure before launching Minecraft. Executable bootstrap assets under `bootstrap/` can be published only by the deployment role. The instance can read snapshots/assets/worlds and write world backups; it cannot change saved blueprints or bootstrap code.
 
-Visit `/tools/minecraft` and use **World vault**:
+## SSH and recovery
 
-- **Save backup to S3** briefly stops Minecraft and stores the complete map in private S3.
-- **Download ZIP** downloads a saved map even when EC2 has been destroyed.
-- **Select for restore**, or choose a local ZIP and **Upload ZIP to S3**, then confirm **Restore selected world**. Launch the server first. The current world is saved to S3 before it is replaced. Successfully restored uploads are also kept permanently in the vault.
+Private administrative SSH remains available with `python3 scripts/minecraft-world.py ssh`, using AWS CLI credentials, OpenSSH and the AWS Session Manager plugin. The helper's private key is stored locally under ignored `.local/minecraft/`; port 22 remains closed. Direct CLI upload/restore has been removed: choose and load worlds through S3 and the stopped-server page.
 
-All three dimensions and player data are included. Backups contain only `world/...` and must match the server's Minecraft/mod versions. ZIPs are limited to 1 GiB; uncompressed restores also need sufficient free EC2 disk space. Invalid paths, symlinks and unrelated server files are rejected before replacement. The old on-instance world is retained as a second recovery copy.
-
-The persistent bucket is `<AWS_ACCOUNT_ID>-portfolio-minecraft-backups`, managed by the main `infra/` stack with public access blocked, TLS required, encryption and versioning enabled. Its Terraform destroy protection prevents accidental bucket deletion. Saved archives under `backups/` are retained indefinitely (S3 charges apply); use the S3 console for deletion/retention management. Temporary `uploads/` expire after one day; lifecycle deletion is asynchronous. The dashboard does not give browsers AWS keys, GitHub tokens or SSM access. Upload policies expire after 15 minutes; download links expire after 5 minutes. Do not share those bearer links.
-
-Cognito protects every catalog/upload/download/control endpoint. Map operations dispatch the allowlisted `minecraft-backup.yml` workflow, use the same operation lock/concurrency as deploy/destroy, and execute through SSM using the instance's IAM role. Large files travel directly between the browser/S3 or EC2/S3. Lambda never receives the ZIP itself.
-
-Deploy the main infrastructure first, then update the existing instance IAM policy through Terraform without replacing EC2. New Minecraft deployments automatically get the policy. The GitHub OIDC role also needs the updated `docs/minecraft-deployment-policy.json` inline policy for the backup bucket and tag-restricted SSM Run Command. No additional GitHub secrets or variables are required.
-
-Keep the page open to see completion, or return later: GitHub Actions and SSM run independently. If a workflow is cancelled while its SSM command is still running, the operation lease is deliberately retained for up to one hour. Inspect the workflow/SSM command before retrying. For an interrupted restore that leaves maintenance paused, use the SSH `resume` helper after checking that the SSM command has stopped. EC2/DNS/EBS deletion is still performed exclusively through Terraform.
+If a transfer is interrupted, inspect GitHub Actions and the SSM command before retrying. Active/uncertain commands retain the operation lease for safety. The `resume` SSH helper can recover paused maintenance after confirming the command has stopped. If startup fails before a map exists, use the manual **Minecraft destroy** workflow's explicitly destructive `skip_backup` recovery option. Normal page Stop and automatic idle cleanup never skip the backup. A failed stop that already saved a map can likewise be recovered after confirming that archive exists in S3.
