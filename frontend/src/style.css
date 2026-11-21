@@ -126,3 +126,39 @@
   .document-body :not(pre) > code { color: var(--color-accent); }
   .document-body th, .document-body td { border: 1px solid var(--color-line); padding: .35rem .65rem; }
 }
+
+:root { color-scheme: dark; }
+:root[data-theme='light'] {
+  color-scheme: light;
+  --color-base: #f7f8f1;
+  --color-panel: #edf0e5;
+  --color-ink: #20261c;
+  --color-soft: #384635;
+  --color-muted: #4f5c4b;
+  --color-accent: #386509;
+  --color-line: #ced7c4;
+}
+
+@layer components {
+  .preference-control {
+    min-height: 40px;
+    border: 1px solid var(--color-line);
+    border-radius: 5px;
+    background: var(--color-panel);
+    padding: 0 .55rem;
+    font-size: .8rem;
+    color: var(--color-ink);
+  }
+
+  button.preference-control { min-width: 40px; font-size: 1.1rem; }
+  .preference-control:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+  [data-theme='light'] .primary-button,
+  [data-theme='light'] .skip-link { color: #fff; }
+  [data-theme='light'] .primary-button:hover { background: #2a5106; }
+  [data-theme='light'] :is(.about-section, .contact-section, .terminal, .tag) { background: var(--color-panel); }
+  [data-theme='light'] :is(.terminal-title, .terminal-footer button) { background: #e0e8d5; }
+  [data-theme='light'] :is(.terminal, .terminal-title, .terminal-footer, .header-github) { border-color: var(--color-line); }
+  [data-theme='light'] :is(.terminal-title, .terminal-output, .terminal-footer, .terminal-footer button, .tag) { color: var(--color-soft); }
+  [data-theme='light'] .contact-asterisk { color: #38650914; }
+}

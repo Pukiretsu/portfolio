@@ -50,6 +50,18 @@ resource "aws_cloudfront_distribution" "website" {
     response_headers_policy_id = data.aws_cloudfront_response_headers_policy.security.id
   }
 
+  # The private S3 origin can report missing keys as AccessDenied.
+  dynamic "custom_error_response" {
+    for_each = toset([403, 404])
+
+    content {
+      error_code            = custom_error_response.value
+      response_code         = 404
+      response_page_path    = "/errors.html"
+      error_caching_min_ttl = 10
+    }
+  }
+
   restrictions {
     geo_restriction {
       restriction_type = "none"
