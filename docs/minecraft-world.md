@@ -37,7 +37,7 @@ Visit `/tools/minecraft` and use **World vault**:
 
 - **Save backup to S3** briefly stops Minecraft and stores the complete map in private S3.
 - **Download ZIP** downloads a saved map even when EC2 has been destroyed.
-- **Select for restore**, or choose a local ZIP and **Upload ZIP to S3**, then confirm **Restore selected world**. Launch the server first. The current world is saved to S3 before it is replaced.
+- **Select for restore**, or choose a local ZIP and **Upload ZIP to S3**, then confirm **Restore selected world**. Launch the server first. The current world is saved to S3 before it is replaced. Successfully restored uploads are also kept permanently in the vault.
 
 All three dimensions and player data are included. Backups contain only `world/...` and must match the server's Minecraft/mod versions. ZIPs are limited to 1 GiB; uncompressed restores also need sufficient free EC2 disk space. Invalid paths, symlinks and unrelated server files are rejected before replacement. The old on-instance world is retained as a second recovery copy.
 

@@ -50,6 +50,9 @@ def main():
             finally:
                 previous.unlink(missing_ok=True)
             world.restore(str(local), token)
+            if key.startswith('uploads/'):
+                # A validated/restored upload becomes a durable, downloadable vault entry.
+                copy(str(local), 's3://' + bucket + '/backups/' + str(uuid.uuid4()) + '.zip')
             print('World restored. The previous map is also saved in S3.', flush=True)
         else:
             raise RuntimeError('Unsupported operation')

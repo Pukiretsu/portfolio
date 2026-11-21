@@ -136,6 +136,25 @@ class MapWorkerTests(unittest.TestCase):
             fake.resume.assert_called_once_with('token')
             self.assertEqual(len(calls), 2)
 
+    def test_restored_upload_is_saved_as_a_durable_vault_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            previous = Path(directory) / 'previous.zip'
+            previous.write_bytes(b'previous-map')
+            fake = MagicMock()
+            fake.TRANSFER = Path(directory)
+            fake.backup.return_value = previous
+            copies = []
+            def copy(source, destination):
+                copies.append((source, destination))
+                if source.startswith('s3://'):
+                    Path(destination).write_bytes(b'restored-map')
+            with patch.object(worker, 'world', fake), patch.object(worker, 'copy', side_effect=copy), patch.object(sys, 'argv', ['worker', 'restore', UPLOAD, 'private-maps', 'token']):
+                worker.main()
+            self.assertEqual(len(copies), 3)
+            self.assertTrue(copies[-1][1].startswith('s3://private-maps/backups/'))
+            fake.restore.assert_called_once()
+            fake.resume.assert_called_once_with('token')
+
     def test_successful_backup_uploads_only_selected_key_and_resumes(self):
         with tempfile.TemporaryDirectory() as directory:
             archive = Path(directory) / 'map.zip'
