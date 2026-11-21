@@ -14,7 +14,7 @@ import zipfile
 API = 'https://api.modrinth.com/v2'
 ROOT = Path('/srv/minecraft')
 PROJECTS = ('fabric-api', 'lithium', 'ferrite-core', 'c2me-fabric',
-            'scalablelux', 'noisium', 'vmp-fabric', 'chunky', 'krypton')
+            'scalablelux', 'vmp-fabric', 'chunky', 'krypton')
 
 
 def fetch(url):
